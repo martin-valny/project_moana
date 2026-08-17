@@ -125,6 +125,77 @@ against `npm run preview`, headless Chromium) rather than trusting a clean
 error; the app "worked," it just didn't look like anything close to the
 design brief.
 
+### Visual engine rewrite (v2): particles → domain-warped fBm shader
+
+After a first look, the user supplied a corrected visual-engine brief:
+the reference art direction (soft, swirling, marbled cobalt/cyan ribbons)
+is the signature of **domain-warped fractal Brownian motion**, not
+particle motion, and asked for the surface to be rebuilt on that
+technique — plus a real coastline mask, a right-side glass selection
+panel, and a draggable timeline, replacing several Phase 0 choices above.
+Implemented in full:
+
+- **Land mask**: `scripts/generate-land-mask.mjs` rasterizes
+  `world-atlas`'s real 110m land topology into a 1024×512 single-channel
+  PNG via a plain scanline polygon fill (no native canvas dependency).
+  Real coastlines, deliberately coarse — matches §5.1's "enough for
+  orientation, not enough to read as an atlas" with actual geographic
+  data rather than hand-drawn blobs.
+- **Surface shader**: one merged shader pass on `GlobeSphere` — land mask
+  lookup (computed from the fragment's own position via the same lat/lon
+  convention as `geo.ts`, not the built-in UV attribute, so it's
+  guaranteed to agree with the rest of the app), then for ocean fragments,
+  5-octave fBm with a **double** domain warp (Iñigo Quilez's technique).
+  First attempt used a single warp layer and read as blobby clouds, not
+  ribbons — the second warp layer is specifically what produces the long,
+  self-similar, marbled curling the brief described; documented in
+  `shaders/fbm.ts` so it doesn't get "simplified" back to one layer later.
+  Flow direction and contrast are biased by Helena's actual current
+  heading/energy (normalised), not arbitrary constants — with the caveat
+  that Phase 0 has one swell, not a field, so this is a global bias, not
+  yet spatially varying (see the README's fuller scope note).
+- **Tuning pass**: the first render was far too bright/uniform (a lit
+  blue ball, not "near-black with occasional ribbons") — fixed by pushing
+  the colour ramp's thresholds higher so most of the noise range stays
+  deep navy and only the upper end lights up, restoring the generous
+  negative space Principle 1 asks for.
+- **Bloom**: `luminanceThreshold` raised to ~0.85 and the ocean colour
+  ramp's peak authored above 1.0 in RGB, so bloom is selective (ribbon
+  crests + atmosphere rim only) rather than a global wash. Added a very
+  subtle film-grain pass alongside the existing vignette.
+- **Path arc**: `HelenaPath` restyled as a thin raised arc (bows up
+  mid-path) with a per-waypoint cobalt→bright-cyan vertex-colour gradient
+  keyed to energy, so it reads as the same visual language as the surface
+  shader rather than a separate flat-line overlay.
+- **UI**: replaced the pill-button time scrubber and bottom-sheet panel
+  with a top-left serif wordmark + tagline (`Masthead`), a thin draggable
+  timeline with Now/Tomorrow/3 Days as labelled snap points rather than
+  the only reachable positions (`Timeline` — still moves only Helena's
+  displayed position, per §8), and a right-side translucent glass panel on
+  selection (`SwellPanel`) trimmed to exactly what the brief specified:
+  name, one uppercase descriptor, a single "Follow Swell" button, no
+  numeric-details affordance this time.
+- **Quality tiers**: `qualityTier.ts` — a single startup heuristic
+  (cores/memory/mobile UA/reduced-motion) picking octave count and bloom
+  mip-blur once, not per frame.
+
+**A flag raised rather than silently built** (§0 rule 2): the wordmark
+renders the literal text "MOANA.", per the brief's reference image.
+§12.1 is explicit that "Moana" is a codename only, not clear for brand
+assets. Judged low-risk enough to leave in — it's a plain string in a
+throwaway prototype, not a logo or domain, trivial to swap — but flagged
+here and in the prototype's own README rather than assumed away; swap it
+before this is shown outside the immediate working group.
+
+Re-verified after the rewrite: `npm run build`/`lint` clean, the
+Playwright smoke test updated for the new UI (marker tap → right panel,
+Follow Swell persistence, timeline-label jump, attribution sheet) still
+passes with zero console errors, and the surface shader was tuned through
+several screenshot-compare iterations against the brief's own description
+(not the literal reference image, which wasn't available to compare
+pixel-for-pixel) before settling — consistent with the brief's own
+expectation that this takes several passes.
+
 ### Verified, and how
 
 No physical phone or human testers were available in this session, so

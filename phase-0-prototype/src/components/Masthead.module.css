@@ -1,0 +1,34 @@
+.wrap {
+  pointer-events: none;
+}
+
+.wordmark {
+  margin: 0;
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  color: rgba(230, 242, 248, 0.82);
+  animation: riseIn 1.6s ease forwards;
+}
+
+.tagline {
+  margin: 7px 0 0;
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+  font-style: italic;
+  font-weight: 300;
+  font-size: 13.5px;
+  color: rgba(200, 222, 236, 0.5);
+  animation: riseIn 2.2s ease forwards;
+}
+
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

@@ -43,18 +43,3 @@ export interface SwellPulse {
   path: SwellPathPoint[];
   narrative_description: string;
 }
-
-/** The three fixed points Phase 0's time scrubber can land on. */
-export type ScrubberStop = 'now' | 'tomorrow' | 'three_days';
-
-export const SCRUBBER_OFFSETS_HOURS: Record<ScrubberStop, number> = {
-  now: 0,
-  tomorrow: 24,
-  three_days: 72,
-};
-
-export const SCRUBBER_LABELS: Record<ScrubberStop, string> = {
-  now: 'Now',
-  tomorrow: 'Tomorrow',
-  three_days: '3 Days',
-};

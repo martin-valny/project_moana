@@ -46,6 +46,16 @@ const RAW_PATH: RawWaypoint[] = [
   { offsetHours: 96, lat: 54.3, lon: -8.5, swell_height: 1.4, swell_period: 11.2, heading_deg: 86 },
 ];
 
+export const HELENA_MIN_OFFSET_HOURS = RAW_PATH[0].offsetHours;
+export const HELENA_MAX_OFFSET_HOURS = RAW_PATH[RAW_PATH.length - 1].offsetHours;
+
+/**
+ * Short uppercase descriptor for the UI panel (visual-engine brief stage
+ * 7) — not part of the §9.1 data contract, a Phase-0-only display
+ * convenience for this one hardcoded swell.
+ */
+export const HELENA_SHORT_LABEL = 'Long-period WNW pulse';
+
 /** §4.4: energy is always the derived H² × T proxy, never a hand-picked number. */
 function energyOf(height: number, period: number): number {
   return height * height * period;

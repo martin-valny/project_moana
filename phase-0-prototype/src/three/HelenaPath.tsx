@@ -3,6 +3,7 @@ import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import { Line } from '@react-three/drei';
 import * as THREE from 'three';
 import { latLonToVector3 } from './geo';
+import { normalizeEnergy } from '../data/interpolate';
 import type { SwellPathPoint, SwellPulse } from '../data/types';
 
 interface HelenaPathProps {
@@ -12,27 +13,35 @@ interface HelenaPathProps {
   onSelect: () => void;
 }
 
-const TRAIL_LIFT = 1.004; // keep the trail a hair above the sphere surface
+const DEEP = new THREE.Color('#134470');
+const BRIGHT = new THREE.Color(1.2, 1.4, 1.5);
 
 /**
- * Helena's own path — the one thing in Phase 0 that's actually
- * data-driven and followable, rendered visually distinct from the
- * ambient field (§2.3 step 4: "user taps a visually distinct,
- * coherent-moving region").
+ * Helena's path, restyled (visual-engine brief stage 6) as a thin raised
+ * arc in the same cobalt-to-white gradient family as the surface shader —
+ * part of one visual language, not a separate line-chart-style overlay.
  */
 export function HelenaPath({ pulse, radius, currentPoint, onSelect }: HelenaPathProps) {
   const markerRef = useRef<THREE.Mesh>(null);
   const glowRef = useRef<THREE.Mesh>(null);
 
-  const trailPoints = useMemo(
-    () => pulse.path.map((p) => latLonToVector3(p.lat, p.lon, radius * TRAIL_LIFT)),
-    [pulse, radius],
-  );
+  const { trailPoints, trailColors } = useMemo(() => {
+    const n = pulse.path.length;
+    const points: THREE.Vector3[] = [];
+    const colors: THREE.Color[] = [];
 
-  const currentPos = useMemo(
-    () => latLonToVector3(currentPoint.lat, currentPoint.lon, radius * TRAIL_LIFT),
-    [currentPoint, radius],
-  );
+    pulse.path.forEach((p, i) => {
+      const bow = Math.sin((i / (n - 1)) * Math.PI) * 0.045; // rises mid-path, settles at the ends
+      const lift = radius * (1.006 + bow);
+      points.push(latLonToVector3(p.lat, p.lon, lift));
+      const e = normalizeEnergy(p.energy);
+      colors.push(DEEP.clone().lerp(BRIGHT, 0.25 + e * 0.6));
+    });
+
+    return { trailPoints: points, trailColors: colors };
+  }, [pulse, radius]);
+
+  const currentPos = useMemo(() => latLonToVector3(currentPoint.lat, currentPoint.lon, radius * 1.01), [currentPoint, radius]);
 
   useFrame((state) => {
     const pulseScale = 1 + Math.sin(state.clock.elapsedTime * 1.6) * 0.18;
@@ -47,21 +56,21 @@ export function HelenaPath({ pulse, radius, currentPoint, onSelect }: HelenaPath
 
   return (
     <group>
-      <Line points={trailPoints} color="#bdeeff" lineWidth={1.6} transparent opacity={0.55} />
+      <Line points={trailPoints} vertexColors={trailColors} lineWidth={1.8} transparent opacity={0.85} />
 
       {/* Larger invisible hit target so the marker is easy to tap on a phone. */}
       <mesh position={currentPos} onClick={handleClick}>
-        <sphereGeometry args={[radius * 0.045, 12, 12]} />
+        <sphereGeometry args={[radius * 0.05, 12, 12]} />
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
 
       <mesh ref={glowRef} position={currentPos}>
-        <sphereGeometry args={[radius * 0.018, 16, 16]} />
-        <meshBasicMaterial color="#7fe8ff" transparent opacity={0.25} depthWrite={false} blending={THREE.AdditiveBlending} />
+        <sphereGeometry args={[radius * 0.02, 16, 16]} />
+        <meshBasicMaterial color={BRIGHT} transparent opacity={0.3} depthWrite={false} blending={THREE.AdditiveBlending} />
       </mesh>
 
       <mesh ref={markerRef} position={currentPos} onClick={handleClick}>
-        <sphereGeometry args={[radius * 0.009, 16, 16]} />
+        <sphereGeometry args={[radius * 0.01, 16, 16]} />
         <meshBasicMaterial color="#ffffff" />
       </mesh>
     </group>

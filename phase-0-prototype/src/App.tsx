@@ -1,54 +1,62 @@
 import { useMemo, useState } from 'react';
 import { Globe } from './three/Globe';
-import { TimeScrubber } from './components/TimeScrubber';
+import { Masthead } from './components/Masthead';
+import { Timeline } from './components/Timeline';
 import { SwellPanel } from './components/SwellPanel';
 import { Attribution } from './components/Attribution';
 import { useFollow } from './hooks/useFollow';
-import { buildHelenaPulse } from './data/helena';
+import { buildHelenaPulse, HELENA_MAX_OFFSET_HOURS, HELENA_MIN_OFFSET_HOURS, HELENA_SHORT_LABEL } from './data/helena';
 import { interpolatePulseAt } from './data/interpolate';
-import { SCRUBBER_OFFSETS_HOURS, type ScrubberStop } from './data/types';
 import './App.css';
 
+const STOPS = [
+  { label: 'Now', hours: 0 },
+  { label: 'Tomorrow', hours: 24 },
+  { label: '3 Days', hours: 72 },
+];
+
 /**
- * Phase 0 — visual-only prototype (MASTER_BUILD_PLAN.md §8).
- * No live data, no backend. One hardcoded swell ("Helena"), a globe,
- * a time scrubber, Follow, and attribution. Nothing else.
+ * Phase 0 — visual-only prototype (MASTER_BUILD_PLAN.md §8), restyled
+ * per the visual-engine brief: a domain-warped fBm globe, a minimal
+ * masthead, a draggable timeline, and a right-side glass panel on
+ * selection. No live data, no backend. One hardcoded swell ("Helena").
  */
 export default function App() {
   const [startTime] = useState(() => new Date());
   const pulse = useMemo(() => buildHelenaPulse(startTime), [startTime]);
 
-  const [scrubberStop, setScrubberStop] = useState<ScrubberStop>('now');
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [offsetHours, setOffsetHours] = useState(0);
+  const [selected, setSelected] = useState(false);
 
   const currentPoint = useMemo(() => {
-    const offsetHours = SCRUBBER_OFFSETS_HOURS[scrubberStop];
     const target = new Date(startTime.getTime() + offsetHours * 60 * 60 * 1000);
     return interpolatePulseAt(pulse, target);
-  }, [pulse, scrubberStop, startTime]);
+  }, [pulse, offsetHours, startTime]);
 
   const { isFollowed, toggleFollow } = useFollow(pulse.id);
 
   return (
     <div className="app">
-      <Globe pulse={pulse} currentPoint={currentPoint} onSelectHelena={() => setPanelOpen(true)} />
+      <Globe pulse={pulse} currentPoint={currentPoint} onSelectHelena={() => setSelected((v) => !v)} />
 
       <div className="overlay">
-        <p className="tagline">The ocean is moving.</p>
+        <div className="topLeft">
+          <Masthead />
+        </div>
 
-        <div className="scrubberDock">
-          <TimeScrubber value={scrubberStop} onChange={setScrubberStop} />
+        <div className="bottomCenter">
+          <Timeline
+            hours={offsetHours}
+            minHours={HELENA_MIN_OFFSET_HOURS}
+            maxHours={HELENA_MAX_OFFSET_HOURS}
+            stops={STOPS}
+            onChange={setOffsetHours}
+          />
         </div>
       </div>
 
-      {panelOpen && (
-        <SwellPanel
-          pulse={pulse}
-          currentPoint={currentPoint}
-          isFollowed={isFollowed}
-          onToggleFollow={toggleFollow}
-          onClose={() => setPanelOpen(false)}
-        />
+      {selected && (
+        <SwellPanel pulse={pulse} shortLabel={HELENA_SHORT_LABEL} isFollowed={isFollowed} onToggleFollow={toggleFollow} />
       )}
 
       <Attribution />

@@ -44,3 +44,16 @@ export function interpolatePulseAt(pulse: SwellPulse, timestamp: Date): SwellPat
 
   return path[path.length - 1];
 }
+
+/**
+ * Normalises §4.4's H²×T energy proxy to 0..1 for shader consumption.
+ * The range is Helena's own min/max (roughly 22 at her weakest, 353 at
+ * peak) — reasonable for a single hardcoded Phase 0 swell, not a
+ * general-purpose calibration. Revisit once a real populated
+ * `SwellFieldFrame` exists to normalise against.
+ */
+const ENERGY_RANGE = { min: 0, max: 400 };
+
+export function normalizeEnergy(energy: number): number {
+  return Math.min(1, Math.max(0, (energy - ENERGY_RANGE.min) / (ENERGY_RANGE.max - ENERGY_RANGE.min)));
+}

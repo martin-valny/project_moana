@@ -35,23 +35,20 @@ for (const [fx, fy] of candidates) {
   if (panelVisible) break;
 }
 
-await page.screenshot({ path: '/tmp/moana-phase0-2-after-click.png' });
+await page.screenshot({ path: '/tmp/moana-phase0-2-panel.png' });
 
 if (panelVisible) {
-  await page.locator('button', { hasText: 'Follow' }).click();
+  await page.locator('button', { hasText: 'Follow Swell' }).click();
   await page.waitForTimeout(200);
 }
 const followedStorage = await page.evaluate(() => localStorage.getItem('moana.swellDiary.followedIds'));
 await page.screenshot({ path: '/tmp/moana-phase0-3-followed.png' });
 
-if (panelVisible) {
-  await page.mouse.click(20, 20);
-  await page.waitForTimeout(200);
-}
-
+// Jump the timeline to "3 Days" via its label (exercises the same
+// onChange path a drag would, without relying on synthetic drag timing).
 await page.locator('button', { hasText: '3 Days' }).click();
-await page.waitForTimeout(600);
-await page.screenshot({ path: '/tmp/moana-phase0-4-threedays.png' });
+await page.waitForTimeout(500);
+await page.screenshot({ path: '/tmp/moana-phase0-4-timeline-drag.png' });
 
 await page.locator('button', { hasText: 'Data: Open-Meteo' }).click();
 await page.waitForTimeout(300);
