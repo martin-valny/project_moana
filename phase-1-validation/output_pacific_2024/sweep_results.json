@@ -1,0 +1,215 @@
+{
+  "source": "raw_pacific_2024.json",
+  "n_passed": 16,
+  "n_combinations": 16,
+  "rows": [
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 72,
+        "best_dist_km": 3096.9060894822496
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 72,
+        "best_dist_km": 3096.9060894822496
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 72,
+        "best_dist_km": 3103.2624536116227
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 72,
+        "best_dist_km": 3103.2624536116227
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 132,
+        "best_dist_km": 4636.5110975285515
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 132,
+        "best_dist_km": 4636.5110975285515
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 132,
+        "best_dist_km": 4624.782360075763
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 132,
+        "best_dist_km": 4624.782360075763
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 162,
+        "best_dist_km": 8566.660406166437
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 222,
+        "best_dist_km": 11799.087063625975
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 162,
+        "best_dist_km": 8566.660406166437
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 222,
+        "best_dist_km": 11797.994017357252
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 84,
+        "best_dist_km": 4243.177427590705
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 138,
+        "best_dist_km": 6683.764528828073
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 84,
+        "best_dist_km": 4243.177427590705
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 162,
+        "best_dist_km": 7533.48162631302
+      }
+    }
+  ]
+}

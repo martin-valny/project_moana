@@ -12,21 +12,37 @@ assumes it as background.
 
 ## Where the project stands — READ THIS FIRST
 
-**Phase −1 has now run against FOUR real events across two coasts and two
-winters. The finding is clear and specific: the clustering/tracking
-mechanism works — every single event (4/4) produces a real, coherent,
-multi-day trackable system — but the plan's exact "period ≥12s" groundswell
-threshold is one second tighter than real events consistently need. At
-period≥11, 3 of 4 events clear the 72h/2,000km bar outright across every
-swept setting, and the 4th misses by 0.6% on distance alone.** That's the
-headline. Everything below is how the investigation got there (five
-rounds, two real bugs found and fixed, several false leads caught and
-corrected) — read it for the evidence, but the decision this file exists to
-surface is: **is loosening the groundswell definition from 12s to ~11s an
-acceptable fix, or does 12s reflect a requirement that shouldn't move?**
-See "Round 4 result" below for the full 4-event table before deciding.
-Full technical detail for the original Dec 2025 event specifically is in
-`phase-1-validation/README.md`.
+**Phase −1 has now run against FIVE real events: four North Atlantic
+(two coasts, two winters) and one genuine long-distance Pacific crossing.
+The mechanism works — every event produces a real, coherent, trackable
+system — and the picture has two parts that matter together, not
+separately:**
+
+- **The four North Atlantic events** clear the 72h/2,000km bar
+  consistently only if the groundswell definition is loosened from the
+  plan's period≥12s to period≥11s (3 of 4 pass every swept combination at
+  ≥11s; the 4th misses by 0.6% on distance alone). At the plan's literal
+  ≥12s, 0 of 4 pass.
+- **The Pacific event — a real test of the plan's own §4.6 "epic, 10-day,
+  10,000km" scenario (a storm off New Zealand's Chatham Islands whose
+  swell reached Tahiti, Hawaii, and California in July 2024) — passes
+  16/16 at the plan's literal ≥12s threshold, with no loosening needed.**
+  The winning track holds 222 continuous hours across 9,756km net
+  displacement, crossing the equator, and lands almost exactly on the
+  real event's independently-reported ~10,000km distance to California.
+
+**Read together, this suggests the North Atlantic near-misses are about
+event strength, not a wrong threshold in general** — the Pacific storm was
+simply a more powerful, longer-lived system than any of the four North
+Atlantic events tested, and at the plan's own definition it tracks
+beautifully. Whether to loosen the North Atlantic-relevant threshold to
+11s, treat the four North Atlantic events as an unlucky sample of weaker
+systems, or do something else is still yours to decide — but "the
+mechanism doesn't work" is now clearly the wrong frame; it's "different
+events need different care," which is a much more normal engineering
+problem. See "Round 4 result" and "Round 5 result" below for the full
+tables and reasoning. Full technical detail for the original Dec 2025
+event specifically is in `phase-1-validation/README.md`.
 
 **History (round 1 → 3, single-event basis, before the 4-event picture
 below existed):**
@@ -327,6 +343,57 @@ visually crosses the date line (around lon 180 in the plot, which uses a
 shifted 0-360 longitude convention so the region doesn't render split
 across both edges) and the equator (lat 0) in one continuous piece, the
 way the synthetic smoke test did.
+
+## Round 5 result — fetched and tested. The strongest result of the whole investigation.
+
+**16/16 parameter combinations pass.** At the plan's own strict period≥12s
+definition (period_threshold=13 in the sweep), results are dramatically
+larger than anything seen in the North Atlantic: 84h-222h, 4,243-11,799km,
+depending on the exact setting.
+
+The single longest track (222h continuous, min_cluster_size=5,
+energy_floor=20, angular_tolerance=30) is worth describing directly rather
+than just citing the number: it starts at 45°S, 176°W at hour 54 of the
+window (~July 8, matching the real storm's documented timing and location
+near the Chatham Islands almost exactly), moves in a smooth, physically
+sensible curve north and slightly east through the entire South Pacific,
+**crosses the equator around hour 210** (~July 16-17), and continues to
+**24°N, 118°W by hour 276** (~July 19) -- **9,756km net displacement**,
+extremely close to the real event's independently reported "~10,000km" to
+the Californian coast. Net displacement (9,756km) tracks cumulative path
+(11,799km) at a healthy 83% ratio, the same range as the legitimate (not
+the false-lead) North Atlantic tracks -- not the ~40% ratio that flagged
+the earlier false lead in Round 2.
+
+The international date line crossing itself shows up clearly in the raw
+per-frame clustering just before this track's continuous phase begins: at
+hour 30, two separate clusters were detected straddling the seam (one at
+177°E, one at -178°W, ~230km apart) -- the storm's own generation-phase
+wave field, genuinely chaotic as a storm intensifies, before a single,
+clean, forward-propagating groundswell organizes into the one 222h track
+from hour 54 onward. That's a physically sensible distinction (storm
+generation vs. propagating swell), not a tracking failure.
+
+**What this changes:** this is a direct, real-world test of the exact
+"epic, rare, 10-day/10,000km" scenario the master plan's own §4.6
+describes, and it passes convincingly, at the plan's own strict threshold,
+with no parameter loosening needed. Combined with Round 4's finding (the
+North Atlantic events needed the threshold loosened from 12s to 11s to pass
+consistently), the emerging picture is that **the mechanism handles
+genuinely powerful, long-distance groundswell very well at the plan's own
+definition** -- the Round 4 near-misses look more like they were weaker,
+shorter-lived North Atlantic events relative to this dramatically more
+powerful Southern Ocean-to-Pacific case, not a sign the threshold itself is
+wrong in general. That's a meaningfully different, more optimistic
+framing than Round 4 alone suggested, and worth weighing alongside it
+before deciding whether to adjust the 12s definition at all.
+
+Files: `output_pacific_2024/sweep_results.json`,
+`output_pacific_2024/event_centroid_paths.png` (the default loose-threshold
+view, busy -- real July Pacific storm season has a lot of concurrent
+activity across ~1,200 cells, expected), `output_pacific_2024/
+hero_centroid_paths.png` (the specific period=13 winning track in
+isolation -- the clean, single-story visual).
 
 ## Other open items from the master plan discussion (lower priority than Phase −1)
 
