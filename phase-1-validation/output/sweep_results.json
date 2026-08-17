@@ -1,6 +1,6 @@
 {
-  "source": "SYNTHETIC DATA (code-logic validation only -- see README)",
-  "n_passed_both": 16,
+  "source": "REAL DATA",
+  "n_passed_both": 2,
   "n_combinations": 16,
   "rows": [
     {
@@ -13,25 +13,7 @@
       "clean": {
         "passed": true,
         "best_duration_h": 78,
-        "best_dist_km": 5481.920706000677
-      },
-      "messy": {
-        "passed": true,
-        "max_simultaneous_clusters": 4
-      },
-      "both_passed": true
-    },
-    {
-      "params": {
-        "period_threshold": 11.0,
-        "energy_floor": 20.0,
-        "angular_tolerance": 30.0,
-        "min_cluster_size": 5
-      },
-      "clean": {
-        "passed": true,
-        "best_duration_h": 78,
-        "best_dist_km": 5481.920706000677
+        "best_dist_km": 3069.7417503808933
       },
       "messy": {
         "passed": true,
@@ -43,73 +25,91 @@
       "params": {
         "period_threshold": 11.0,
         "energy_floor": 20.0,
-        "angular_tolerance": 50.0,
-        "min_cluster_size": 3
-      },
-      "clean": {
-        "passed": true,
-        "best_duration_h": 78,
-        "best_dist_km": 5481.920706000677
-      },
-      "messy": {
-        "passed": true,
-        "max_simultaneous_clusters": 4
-      },
-      "both_passed": true
-    },
-    {
-      "params": {
-        "period_threshold": 11.0,
-        "energy_floor": 20.0,
-        "angular_tolerance": 50.0,
-        "min_cluster_size": 5
-      },
-      "clean": {
-        "passed": true,
-        "best_duration_h": 78,
-        "best_dist_km": 5481.920706000677
-      },
-      "messy": {
-        "passed": true,
-        "max_simultaneous_clusters": 1
-      },
-      "both_passed": true
-    },
-    {
-      "params": {
-        "period_threshold": 11.0,
-        "energy_floor": 40.0,
-        "angular_tolerance": 30.0,
-        "min_cluster_size": 3
-      },
-      "clean": {
-        "passed": true,
-        "best_duration_h": 78,
-        "best_dist_km": 5556.267304234324
-      },
-      "messy": {
-        "passed": true,
-        "max_simultaneous_clusters": 1
-      },
-      "both_passed": true
-    },
-    {
-      "params": {
-        "period_threshold": 11.0,
-        "energy_floor": 40.0,
         "angular_tolerance": 30.0,
         "min_cluster_size": 5
       },
       "clean": {
-        "passed": true,
-        "best_duration_h": 72,
-        "best_dist_km": 5256.246843962718
+        "passed": false,
+        "best_duration_h": 60,
+        "best_dist_km": 2544.8866166269104
       },
       "messy": {
         "passed": true,
         "max_simultaneous_clusters": 0
       },
+      "both_passed": false
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 3
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 78,
+        "best_dist_km": 3134.4076401295265
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 1
+      },
       "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 5
+      },
+      "clean": {
+        "passed": false,
+        "best_duration_h": 66,
+        "best_dist_km": 2819.261180007445
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 0
+      },
+      "both_passed": false
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 3
+      },
+      "clean": {
+        "passed": false,
+        "best_duration_h": 60,
+        "best_dist_km": 2116.461844158196
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 1
+      },
+      "both_passed": false
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "clean": {
+        "passed": false,
+        "best_duration_h": 60,
+        "best_dist_km": 2116.461844158196
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 0
+      },
+      "both_passed": false
     },
     {
       "params": {
@@ -119,15 +119,15 @@
         "min_cluster_size": 3
       },
       "clean": {
-        "passed": true,
-        "best_duration_h": 78,
-        "best_dist_km": 5556.267304234324
+        "passed": false,
+        "best_duration_h": 60,
+        "best_dist_km": 2116.461844158196
       },
       "messy": {
         "passed": true,
         "max_simultaneous_clusters": 1
       },
-      "both_passed": true
+      "both_passed": false
     },
     {
       "params": {
@@ -137,15 +137,15 @@
         "min_cluster_size": 5
       },
       "clean": {
-        "passed": true,
-        "best_duration_h": 72,
-        "best_dist_km": 5256.246843962718
+        "passed": false,
+        "best_duration_h": 60,
+        "best_dist_km": 2116.461844158196
       },
       "messy": {
         "passed": true,
         "max_simultaneous_clusters": 0
       },
-      "both_passed": true
+      "both_passed": false
     },
     {
       "params": {
@@ -155,105 +155,105 @@
         "min_cluster_size": 3
       },
       "clean": {
-        "passed": true,
-        "best_duration_h": 78,
-        "best_dist_km": 5481.920706000677
-      },
-      "messy": {
-        "passed": true,
-        "max_simultaneous_clusters": 1
-      },
-      "both_passed": true
-    },
-    {
-      "params": {
-        "period_threshold": 13.0,
-        "energy_floor": 20.0,
-        "angular_tolerance": 30.0,
-        "min_cluster_size": 5
-      },
-      "clean": {
-        "passed": true,
-        "best_duration_h": 78,
-        "best_dist_km": 5481.920706000677
-      },
-      "messy": {
-        "passed": true,
-        "max_simultaneous_clusters": 1
-      },
-      "both_passed": true
-    },
-    {
-      "params": {
-        "period_threshold": 13.0,
-        "energy_floor": 20.0,
-        "angular_tolerance": 50.0,
-        "min_cluster_size": 3
-      },
-      "clean": {
-        "passed": true,
-        "best_duration_h": 78,
-        "best_dist_km": 5481.920706000677
-      },
-      "messy": {
-        "passed": true,
-        "max_simultaneous_clusters": 1
-      },
-      "both_passed": true
-    },
-    {
-      "params": {
-        "period_threshold": 13.0,
-        "energy_floor": 20.0,
-        "angular_tolerance": 50.0,
-        "min_cluster_size": 5
-      },
-      "clean": {
-        "passed": true,
-        "best_duration_h": 78,
-        "best_dist_km": 5481.920706000677
-      },
-      "messy": {
-        "passed": true,
-        "max_simultaneous_clusters": 1
-      },
-      "both_passed": true
-    },
-    {
-      "params": {
-        "period_threshold": 13.0,
-        "energy_floor": 40.0,
-        "angular_tolerance": 30.0,
-        "min_cluster_size": 3
-      },
-      "clean": {
-        "passed": true,
-        "best_duration_h": 78,
-        "best_dist_km": 5556.267304234324
-      },
-      "messy": {
-        "passed": true,
-        "max_simultaneous_clusters": 1
-      },
-      "both_passed": true
-    },
-    {
-      "params": {
-        "period_threshold": 13.0,
-        "energy_floor": 40.0,
-        "angular_tolerance": 30.0,
-        "min_cluster_size": 5
-      },
-      "clean": {
-        "passed": true,
-        "best_duration_h": 72,
-        "best_dist_km": 5256.246843962718
+        "passed": false,
+        "best_duration_h": 24,
+        "best_dist_km": 1389.2995474746022
       },
       "messy": {
         "passed": true,
         "max_simultaneous_clusters": 0
       },
-      "both_passed": true
+      "both_passed": false
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "clean": {
+        "passed": false,
+        "best_duration_h": 24,
+        "best_dist_km": 1389.2995474746022
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 0
+      },
+      "both_passed": false
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 3
+      },
+      "clean": {
+        "passed": false,
+        "best_duration_h": 24,
+        "best_dist_km": 1389.2995474746022
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 0
+      },
+      "both_passed": false
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 5
+      },
+      "clean": {
+        "passed": false,
+        "best_duration_h": 24,
+        "best_dist_km": 1389.2995474746022
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 0
+      },
+      "both_passed": false
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 3
+      },
+      "clean": {
+        "passed": false,
+        "best_duration_h": 24,
+        "best_dist_km": 1089.803215756177
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 0
+      },
+      "both_passed": false
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "clean": {
+        "passed": false,
+        "best_duration_h": 24,
+        "best_dist_km": 1089.803215756177
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 0
+      },
+      "both_passed": false
     },
     {
       "params": {
@@ -263,15 +263,15 @@
         "min_cluster_size": 3
       },
       "clean": {
-        "passed": true,
-        "best_duration_h": 78,
-        "best_dist_km": 5556.267304234324
+        "passed": false,
+        "best_duration_h": 24,
+        "best_dist_km": 1089.803215756177
       },
       "messy": {
         "passed": true,
-        "max_simultaneous_clusters": 1
+        "max_simultaneous_clusters": 0
       },
-      "both_passed": true
+      "both_passed": false
     },
     {
       "params": {
@@ -281,15 +281,15 @@
         "min_cluster_size": 5
       },
       "clean": {
-        "passed": true,
-        "best_duration_h": 72,
-        "best_dist_km": 5256.246843962718
+        "passed": false,
+        "best_duration_h": 24,
+        "best_dist_km": 1089.803215756177
       },
       "messy": {
         "passed": true,
         "max_simultaneous_clusters": 0
       },
-      "both_passed": true
+      "both_passed": false
     }
   ]
 }

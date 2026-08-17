@@ -499,7 +499,9 @@ narrative_description
 
 Specific historical date ranges for the clean and messy windows are not yet chosen. Needs a candidate North Atlantic groundswell event with a documented arrival in Portugal or Ireland.
 
-**Update (this session, 2026-08-17):** researched candidates — see `PROGRESS.md` and `phase-1-validation/README.md`. Clean window tentatively set to Dec 11-24, 2025 (brackets the well-documented Dec 18, 2025 Mullaghmore Head, Ireland swell). Messy window (Sep 8-21, 2025) is an **unverified placeholder** — confirm from the actual data, not news silence, before trusting it.
+**Update (2026-08-17):** researched candidates and ran the actual Phase −1 test against them — see `PROGRESS.md` and `phase-1-validation/README.md` for full detail. Clean window: Dec 11-24, 2025 (brackets the well-documented Dec 18, 2025 Mullaghmore Head, Ireland swell — confirmed present in the real fetched data, 10.6m/13.5s peak, correctly timed). Messy window (Sep 8-21, 2025) remains an **unverified placeholder** — it produced near-zero clusters at every tested setting, consistent with "quiet" but never independently cross-checked against the raw wave height as the plan itself recommends.
+
+**Result, and this is the important part:** against this real clean window, the clustering/tracking approach as currently implemented does **not** robustly pass the criteria in §8. The longest continuous track at the plan's own groundswell definition (period ≥12s) held for only 36h/1,814km, well short of 72h/2,000km, and a fine sweep of the period threshold produced a jagged, non-monotonic result — the plan's own named signature of a knife-edge rather than a robust pass. This is one real test event, not a final verdict, and untried next steps (secondary/tertiary swell components, period-direction-space clustering, a second test event) are listed in `PROGRESS.md`. Per this section's own instruction, the fallback pivot ("adopt an arrival" instead of "adopt a system") should be escalated to the user, not decided unilaterally by an agent — and that escalation is where things currently stand.
 
 ### 12.3 Print fulfilment partner
 

@@ -18,6 +18,9 @@ def main():
     parser.add_argument("--real", nargs=2, metavar=("CLEAN_JSON", "MESSY_JSON"), default=None,
                          help="use real data (from fetch_real_data.py + real_data.py) instead of synthetic")
     parser.add_argument("--out", default="output")
+    parser.add_argument("--smooth", type=int, default=0, metavar="WINDOW",
+                         help="apply temporal smoothing over WINDOW frames before clustering "
+                              "(per the plan's §8 fragmentation fix); 0 = off")
     args = parser.parse_args()
 
     if args.real:
@@ -30,6 +33,12 @@ def main():
         clean_frames = generate_frames("clean")
         messy_frames = generate_frames("messy")
         source = "SYNTHETIC DATA (code-logic validation only -- see README)"
+
+    if args.smooth:
+        from smoothing import smooth_frames
+        clean_frames = smooth_frames(clean_frames, window=args.smooth)
+        messy_frames = smooth_frames(messy_frames, window=args.smooth)
+        source += f" (smoothed, window={args.smooth})"
 
     print(f"=== Phase -1 validation: {source} ===\n")
 
