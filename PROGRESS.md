@@ -46,31 +46,49 @@ deciding. Short version:
   zero difference.
 
 **This is one real test event.** It's a real signal, not a proven verdict.
-Untried next steps that could still change the picture, roughly in order
-of how promising they seem:
-1. Fetch Open-Meteo's secondary/tertiary swell components (mentioned in
-   the plan's §4.1) and cluster on separated wave trains instead of one
-   dominant component per cell — the current implementation collapses each
-   grid cell to a single "biggest" component, which may be discarding the
-   actual coherent long-period signal in favor of locally louder
-   short-period noise at many points.
-2. Cluster in period-direction space rather than filtering geographically
-   first — the plan's own §8 suggestion, though originally aimed at the
-   *merge* failure mode rather than this one.
-3. Test a second real event (different season, different storm track) to
-   see if this is a property of this one event or a general pattern.
-4. If none of that changes the picture: the plan's own documented fallback
-   is to pivot from adopting a *system* to adopting an *arrival* — track
-   energy building at a specific coastline instead of a whole moving
-   system. Less romantic, more tractable, preserves most of the emotional
-   payoff. This is the option the plan explicitly says to escalate rather
-   than decide alone.
 
-**What you (or a next agent, on your explicit instruction) might do next**
-is any of #1-3 above as further diagnosis, or a direct conversation about
-whether #4 is warranted already. Don't default to #4 without at least
-trying #1, which is the most likely to actually be the fix — but that's a
-recommendation, not a decision made on your behalf.
+**Round 2 (this session, same day):** researched how operational wave
+forecasting actually does this. WAVEWATCH III doesn't track a single
+"dominant value per grid point" — it partitions each point's spectrum into
+windsea + up to 5 separate swell systems first (Hanson & Phillips 2001),
+then runs dedicated spatial tracking on top, because (per published work,
+arXiv:1812.06662) a single collapsed value per point isn't spatially/
+temporally coherent enough to track alone. That's independent confirmation
+of the exact instability found above, and directly validates trying
+Open-Meteo's secondary swell field. Two more things tested:
+
+- **Finer time resolution — looked like a big win, wasn't.** First test
+  showed 78h at 1-hour steps vs. 36h at 6-hour steps. Turned out to be a
+  measurement artifact: the tracker's match-distance tolerance was still
+  calibrated for 6-hour steps, so at 1-hour steps it was loose enough to
+  bridge unrelated nearby blips into a fake "continuous" track (net
+  displacement 3,386km vs. a claimed cumulative path of 8,146km, wandering
+  from 50°N down to the grid's southern edge — nothing like the real
+  event). With the tolerance properly scaled to each timestep: 36h → 18h →
+  17h as resolution increases. Finer sampling alone doesn't help.
+- **Split swell vs. wind-sea into independent candidates per cell**
+  (instead of picking whichever has higher energy) — implemented in
+  `clustering.py`/`real_data.py`. On the data already in hand, this alone
+  was a wash to mildly worse. Expected, in hindsight: separating swell
+  from wind-sea without also separating *coexisting swell trains* just
+  adds more candidates to the same graph. `fetch_real_data.py` now probes
+  for and requests `secondary_swell_wave_*` if the API supports it — the
+  real test of the partitioning hypothesis, not yet run.
+
+**Next step, concretely:** re-run the fetch (same commands as before) with
+the updated `fetch_real_data.py` — it'll print whether the API actually
+supports secondary swell data for this model, and if so, `run_validation.py
+--real` will automatically use it (no flag needed, `real_data.py` picks it
+up if present). If that still doesn't produce a robust pass, the remaining
+options are (a) cluster in period-direction space rather than filtering
+geographically first (plan's own §8 suggestion, originally aimed at a
+different failure mode), (b) test a second real event to see if this is
+event-specific, or (c) the plan's own documented fallback: pivot from
+adopting a *system* to adopting an *arrival* (track energy building at one
+coastline instead of a whole moving system) — the option the plan
+explicitly says to escalate rather than decide alone. Don't jump to (c)
+without trying the secondary-swell re-fetch first; that's still the most
+promising untried lever.
 
 ## What's been built: `phase-1-validation/`
 
@@ -110,28 +128,28 @@ result, not a leftover data problem.
 
 ## If you want to pursue next steps yourself
 
-**Fetch more real data** (for a second test event, or anything else) —
-same process as before, on a machine with real internet access:
+**Re-fetch real data with secondary swell support** (the current top
+priority next step) — same process as before, on a machine with real
+internet access:
 
 ```bash
 cd phase-1-validation
-python3 fetch_real_data.py --window clean   # or add a new window to WINDOWS in the script
+python3 fetch_real_data.py --window clean
+python3 fetch_real_data.py --window messy
 ```
 
-Hand back the resulting `raw_*.json` (gitignored, so `git add -f` it or
-send directly), then:
+Watch for the `probe:` lines near the start of each run — they'll say
+either `secondary swell component available, requesting: [...]` or
+`dropping unsupported variables`. Either way it's informative. Hand back
+the resulting `raw_*.json` (gitignored, so `git add -f` it or send
+directly), then:
 
 ```bash
 python3 run_validation.py --real raw_clean.json raw_messy.json
 ```
 
-**To try secondary/tertiary swell components** (next-step #1 above):
-`real_data.py`'s `load_raw_to_frames()` currently picks whichever of
-`{swell, wind_wave}` has higher H²T per cell. Open-Meteo's marine API can
-return secondary/tertiary swell component variables on some models (per
-plan §4.1) — `fetch_real_data.py` doesn't request them yet. This would be
-new fetcher variables plus a change to how `real_data.py` picks/separates
-components, then a re-run of the same pipeline.
+No extra flag needed — `real_data.py` automatically includes secondary
+swell as a separate clusterable candidate per cell if the fetch got it.
 
 ## Other open items from the master plan discussion (lower priority than Phase −1)
 

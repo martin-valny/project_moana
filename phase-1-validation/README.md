@@ -56,21 +56,58 @@ But tracking it as one coherent, followable system does not hold up:
 test window, one grid resolution, one land mask (a crude one, see `grid.py`).
 It's not yet a general verdict on "swells don't cluster," only a real,
 concrete signal against the current threshold-filtering approach on this
-specific case. Untried options that could still change the picture: (a)
-testing a second real event to see if this is a one-off or a pattern, (b)
-clustering in period-direction space rather than filtering geographically
-first (the plan's own §8 suggestion for the *merge* failure mode, not yet
-applied here), (c) fetching Open-Meteo's secondary/tertiary swell
-components to separate coexisting trains instead of collapsing each cell to
-one dominant component, which this implementation currently does. None of
-these have been tried yet -- they're the natural next steps, not a
-conclusion that the mechanic is dead.
+specific case.
 
 The messy window (Sep 8-21, 2025, still unverified as genuinely
 representative) showed ~0 persistent clusters at every tested setting,
 including the loosest one -- trivially "passes" the ≤5 ceiling, but so
 trivially that it doesn't really stress-test "keep several systems
 separate" the way the criterion intends. Worth a second messy window too.
+
+### Round 2 investigation: what the literature says, and two more ruled-out fixes
+
+Prompted by "shouldn't this be trackable? go find how others do it." Two
+findings, one of them a caught false lead -- included here because it's a
+useful example of not trusting a first result:
+
+- **How operational forecasting actually does this.** WAVEWATCH III doesn't
+  track a single "dominant value per grid point." It partitions each
+  point's full spectrum into windsea + up to 5 separate swell systems first
+  (Hanson & Phillips 2001), and only *then* runs a dedicated spatial
+  tracking algorithm across grid points and time -- because, per published
+  work on exactly this ("Spatially Tracking Wave Events in Partitioned
+  Numerical Wave Model Outputs," arXiv:1812.06662), partition labels alone
+  don't preserve spatial/temporal coherence without additional processing.
+  That's an independent, academic confirmation of the exact instability
+  seen here. It directly validates trying Open-Meteo's secondary/tertiary
+  swell fields (§4.1) instead of collapsing each cell to one value.
+- **False lead, caught and corrected: does finer time resolution help?**
+  First pass looked like a huge win -- 78h at 1-hour steps vs. 36h at
+  6-hour steps, at the plan's own period threshold. It wasn't real. The
+  tracker's match-distance tolerance (450km) was calibrated for 6-hour
+  steps; at 1-hour steps, real expected displacement is ~10x smaller, so
+  the same fixed tolerance was loose enough to bridge essentially unrelated
+  nearby blips into a falsely "continuous" track (net displacement was
+  3,386km against a *reported* cumulative path of 8,146km -- and the track
+  wandered from 50°N down to 20°N, the grid's edge, nothing like a
+  swell heading toward Ireland). Rerun with the match tolerance properly
+  scaled to each timestep: **36h → 18h → 17h as resolution goes from 6h to
+  1h** -- finer sampling alone doesn't help and mildly hurts. Confirms the
+  problem is the data model, not the sampling cadence.
+- **Tried: splitting swell vs. wind-sea into independent clusterable
+  candidates per cell** (instead of picking whichever has higher energy),
+  as a first step toward the partitioning approach above --
+  implemented in `clustering.py`/`real_data.py` now. On the data already in
+  hand (no secondary swell field yet), this alone was a wash to mildly
+  worse (60h vs. 78h at the loosest threshold) -- unsurprising in
+  hindsight: separating swell from wind-sea without also separating
+  *coexisting swell trains* just adds more competing candidate points to
+  the same graph. The real test of the partitioning hypothesis needs actual
+  secondary-swell data, which the original fetch didn't request.
+  `fetch_real_data.py` now probes for `secondary_swell_wave_*` and
+  includes it if the API supports it (gracefully drops it otherwise,
+  learning from the `models=era5_ocean` failure -- see Bug 1 below). A
+  fresh fetch with this is the next concrete step, not yet run.
 
 ### Path here: two bugs hit and fixed before reaching this result
 
@@ -146,10 +183,17 @@ it didn't help on the one real window tested so far).
 
 `output/sweep_results.json`, `output/clean_centroid_paths.png`,
 `output/clean_clusters.gif`, `output/messy_centroid_paths.png`,
-`output/messy_clusters.gif` all reflect this real-data run (Dec 11-24 2025
-clean window, Sep 8-21 2025 messy window). `output/clean_centroid_paths.png`
-in particular is worth opening directly -- it's the single clearest piece of
-evidence, showing the chaotic multi-track field described above.
+`output/messy_clusters.gif` all reflect this specific real-data run (Dec
+11-24 2025 clean window, Sep 8-21 2025 messy window, single dominant
+component per cell -- i.e. the code as it stood before the "Round 2"
+multi-component change below). `output/clean_centroid_paths.png` in
+particular is worth opening directly -- it's the single clearest piece of
+evidence, showing the chaotic multi-track field described above. (The
+Round 2 multi-component checkpoint scored 0/16 on this same data, slightly
+worse -- see that section for why; `output/` was deliberately regenerated
+back to this more-informative 2/16 run rather than left on that interim
+result, since the actual point of Round 2 is the not-yet-tested
+secondary-swell fetch, not the swell/wind-sea split by itself.)
 
 ## Results: synthetic data (superseded by real data above -- kept for the code-logic record)
 
@@ -214,11 +258,11 @@ if you want to see them again. Notes below are from that earlier run:
 | `physics.py` | haversine, bearing, great-circle interpolation, group velocity (Cg = 1.56T) |
 | `grid.py` | North Atlantic ocean grid (20-65N, 80W-0, 2x3deg) with a **crude, hand-rolled** land mask -- fine for this synthetic test, not for production (§4.2 needs a real coastline dataset e.g. Natural Earth/GSHHG) |
 | `synthetic.py` | synthetic "clean" and "messy" swell fields |
-| `clustering.py` | §4.5 region-growing clustering |
+| `clustering.py` | §4.5 region-growing clustering; now operates over multiple simultaneous candidate systems per cell (swell/wind-sea/secondary-swell), not one collapsed value |
 | `tracking.py` | §4.5 group-velocity-projected tracking with lineage |
 | `sweep.py` | parameter sweep + pass-criteria evaluation |
 | `visualize.py` | GIF + centroid-path plots |
-| `fetch_real_data.py` | real Open-Meteo historical marine data fetcher (not runnable in this sandbox) |
-| `real_data.py` | converts fetched real data into the pipeline's frame format |
+| `fetch_real_data.py` | real Open-Meteo historical marine data fetcher (not runnable in this sandbox); probes for secondary swell component support before the full fetch |
+| `real_data.py` | converts fetched real data into the pipeline's frame format; emits a record per available wave component per cell, not just the dominant one |
 | `run_validation.py` | CLI entry point, synthetic or real |
 | `output/` | generated artifacts |

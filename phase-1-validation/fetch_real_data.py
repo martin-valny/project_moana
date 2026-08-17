@@ -18,6 +18,17 @@ Omitting `models` entirely returns proper units ("m", "s") and lets the API
 auto-select forecast vs. archive data by date range -- confirmed against
 both a recent 3-day window and the Dec 2025 historical window.
 
+Requests secondary_swell_wave_* in addition to the primary swell/wind-wave
+fields, per the plan's §4.1 mention that Open-Meteo exposes secondary/
+tertiary swell components "on some models" -- real_data.py now treats each
+component as a separate candidate system for clustering rather than
+collapsing to one dominant value per cell (see that file's docstring for
+why: operational wave models track multiple coexisting systems, not one).
+Since it's *not* guaranteed available for every model/cell, this script
+probes it against one cell first and drops it from the request for
+everyone if it comes back unsupported, rather than failing the whole fetch
+the way the models=era5_ocean bug did.
+
   pip install requests
   python3 fetch_real_data.py --window clean   # Dec 11-24 2025, Mullaghmore
   python3 fetch_real_data.py --window messy    # a quiet shoulder-season week
@@ -33,10 +44,34 @@ import time
 from grid import build_grid
 
 BASE_URL = "https://marine-api.open-meteo.com/v1/marine"
-VARIABLES = [
+CORE_VARIABLES = [
     "swell_wave_height", "swell_wave_direction", "swell_wave_period",
     "wind_wave_height", "wind_wave_direction", "wind_wave_period",
 ]
+OPTIONAL_VARIABLES = [
+    "secondary_swell_wave_height", "secondary_swell_wave_direction", "secondary_swell_wave_period",
+]
+
+
+def probe_optional_variables(session, lat, lon, start_date, end_date):
+    """Test OPTIONAL_VARIABLES against one cell; return the subset that
+    comes back with real units rather than "undefined"."""
+    params = {
+        "latitude": lat, "longitude": lon,
+        "start_date": start_date, "end_date": end_date,
+        "hourly": ",".join(CORE_VARIABLES + OPTIONAL_VARIABLES),
+        "cell_selection": "sea",
+    }
+    resp = session.get(BASE_URL, params=params, timeout=30)
+    resp.raise_for_status()
+    units = resp.json().get("hourly_units", {})
+    supported = [v for v in OPTIONAL_VARIABLES if units.get(v) not in (None, "undefined")]
+    dropped = [v for v in OPTIONAL_VARIABLES if v not in supported]
+    if dropped:
+        print(f"probe: dropping unsupported variables (undefined units): {dropped}")
+    if supported:
+        print(f"probe: secondary swell component available, requesting: {supported}")
+    return supported
 
 WINDOWS = {
     "clean": ("2025-12-11", "2025-12-24"),   # brackets the Dec 18 2025
@@ -57,13 +92,13 @@ WINDOWS = {
 }
 
 
-def fetch_cell(session, lat, lon, start_date, end_date, retries=3):
+def fetch_cell(session, lat, lon, start_date, end_date, variables, retries=3):
     params = {
         "latitude": lat,
         "longitude": lon,
         "start_date": start_date,
         "end_date": end_date,
-        "hourly": ",".join(VARIABLES),
+        "hourly": ",".join(variables),
         "cell_selection": "sea",
     }
     for attempt in range(retries):
@@ -92,12 +127,15 @@ def main():
     out_path = args.out or f"raw_{args.window}.json"
 
     session = requests.Session()
+    optional = probe_optional_variables(session, cells[0][0], cells[0][1], start_date, end_date)
+    variables = CORE_VARIABLES + optional
+
     raw = {"window": args.window, "start_date": start_date, "end_date": end_date, "cells": {}}
     failures = 0
     for i, (lat, lon) in enumerate(cells):
         print(f"[{i+1}/{len(cells)}] fetching ({lat}, {lon})...")
         try:
-            data = fetch_cell(session, lat, lon, start_date, end_date)
+            data = fetch_cell(session, lat, lon, start_date, end_date, variables)
             raw["cells"][f"{lat},{lon}"] = data.get("hourly", {})
         except Exception as e:
             print(f"  failed: {e}")
