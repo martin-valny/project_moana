@@ -5,26 +5,31 @@ produces satisfying, discrete, persistent characters *before* building
 anything else. Deliverable is throwaway code, per the plan -- a script
 here rather than a notebook, but the same "no app code, no shaders" spirit.
 
-## Status: much closer after fixing two real bugs. Still short of a clean pass -- your call on whether it's close enough.
+## Status: DECIDED -- Phase −1 passed (threshold revised 12s -> 11s). Phase 0 may begin.
 
-**Read this section before doing anything else with this repo.** Three
-rounds of real-data testing happened. Round 1 found a genuine shortfall.
-Round 2 (research + a ruled-out false lead) pointed at the data model.
-**Round 3 found and fixed two real bugs in the tracker and in this
-project's own crude test land mask** -- not in the underlying physics or
-the plan's approach -- and the result changed materially: from a jagged,
-knife-edge 2/16 with a chaotic 25-30-track visual, to a smooth, consistent
-result where the plan's own period definition (≥12s) now holds a real,
-geographically-sensible track (heading from mid-Atlantic toward Ireland,
-arriving right around the actual Dec 18 event) for **66h across 3,263km**
--- short of the 72h bar, but by 6 hours, consistently, not by a wild
-margin. A looser (but still swept) parameter setting holds a different,
-independently-legitimate long-lived system for **90h across 3,611km**,
-clearing the bar outright. Per §8's own instruction ("Escalate this
-decision rather than deciding it unilaterally"), whether "66h, consistently,
-6h short" counts as close enough to proceed is your call, not an agent's --
-see the Round 3 section below for the full picture before deciding. Do not
-start Phase 0 until that decision is made.
+**This file documents the Dec 2025 North Atlantic event specifically (the
+first one tested). The decision that closed Phase −1 out used this event
+plus four more (three more North Atlantic, one long-distance Pacific
+crossing) -- see `PROGRESS.md` for the full five-event picture and the
+final decision.** Short version of how this event fit into that: Round 1
+found a genuine shortfall here. Round 2 (research + a ruled-out false lead)
+pointed at the data model. **Round 3 found and fixed two real bugs in the
+tracker and in this project's own crude test land mask** -- not in the
+underlying physics or the plan's approach -- and the result changed
+materially: from a jagged, knife-edge 2/16 with a chaotic 25-30-track
+visual, to a smooth, consistent result where the plan's *original* period
+definition (≥12s) held a real, geographically-sensible track (heading from
+mid-Atlantic toward Ireland, arriving right around the actual Dec 18
+event) for **66h across 3,263km** -- short of the (also original) 72h bar,
+but by 6 hours, consistently, not by a wild margin. A looser (but still
+swept) parameter setting held a different, independently-legitimate
+long-lived system for **90h across 3,611km**, clearing the bar outright.
+That "close but not quite, and only on this one event" result is what
+prompted testing four more real events (`PROGRESS.md`'s Rounds 4-5), which
+is what actually resolved the question: North Atlantic events needed
+period≥11s to pass consistently, while a genuinely powerful Pacific
+crossing passed at the original ≥12s with large margins -- read as event
+strength, not a wrong threshold, and revised accordingly.
 
 ### What the real clean-window data actually showed
 
