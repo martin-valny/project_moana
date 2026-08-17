@@ -1,0 +1,215 @@
+{
+  "source": "raw_clean2_ireland_nov2023.json",
+  "n_passed": 5,
+  "n_combinations": 16,
+  "rows": [
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 96,
+        "best_dist_km": 3889.515202297602
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 90,
+        "best_dist_km": 3581.731649573591
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 90,
+        "best_dist_km": 3620.0007002307834
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 90,
+        "best_dist_km": 3620.0007002307834
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": true,
+        "best_duration_h": 78,
+        "best_dist_km": 2857.5672088601755
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": false,
+        "best_duration_h": 60,
+        "best_dist_km": 2421.9604832233604
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": false,
+        "best_duration_h": 66,
+        "best_dist_km": 2495.580837035652
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": false,
+        "best_duration_h": 66,
+        "best_dist_km": 2495.580837035652
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": false,
+        "best_duration_h": 60,
+        "best_dist_km": 2506.611601582669
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": false,
+        "best_duration_h": 48,
+        "best_dist_km": 2110.275490461268
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": false,
+        "best_duration_h": 60,
+        "best_dist_km": 2369.5201219923133
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": false,
+        "best_duration_h": 48,
+        "best_dist_km": 1945.4065143127368
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": false,
+        "best_duration_h": 30,
+        "best_dist_km": 1077.6818466731875
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": false,
+        "best_duration_h": 24,
+        "best_dist_km": 934.2542419521557
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 3
+      },
+      "eval": {
+        "passed": false,
+        "best_duration_h": 60,
+        "best_dist_km": 2387.2256245138014
+      }
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 5
+      },
+      "eval": {
+        "passed": false,
+        "best_duration_h": 48,
+        "best_dist_km": 1963.1120168342254
+      }
+    }
+  ]
+}
