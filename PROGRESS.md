@@ -6,6 +6,11 @@ This file exists so a new agent picking up this repo cold can tell the user
 exactly what to run next without re-deriving context. Read this before doing
 anything else in this repo.
 
+**The full plan this file references by section number (§4.5, §8, etc.) is
+`MASTER_BUILD_PLAN.md` at the repo root — it was only pasted into an earlier
+chat and not committed until now. Read that file, not just this one; this
+file assumes it as background.**
+
 ## Where the project stands
 
 The repo holds the "Master Build Plan v2" for Moana (an internal codename —
