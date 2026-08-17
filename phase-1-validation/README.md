@@ -5,17 +5,26 @@ produces satisfying, discrete, persistent characters *before* building
 anything else. Deliverable is throwaway code, per the plan -- a script
 here rather than a notebook, but the same "no app code, no shaders" spirit.
 
-## Status: REAL DATA HAS RUN. Result: does not robustly pass. Escalate before building Phase 0.
+## Status: much closer after fixing two real bugs. Still short of a clean pass -- your call on whether it's close enough.
 
-**Read this section before doing anything else with this repo.** The actual
-Phase -1 test -- clustering/tracking against real marine data for the real
-December 2025 North Atlantic groundswell -- has now run. It does not clear
-the plan's own bar robustly. This is not a code bug and not a data-fetch
-bug (both of those happened first and were fixed and ruled out -- see
-below). Per §8's own instruction ("Escalate this decision rather than
-deciding it unilaterally"), this needs the user's decision on how to
-proceed, not a unilateral pivot. Do not start Phase 0 until that decision
-is made.
+**Read this section before doing anything else with this repo.** Three
+rounds of real-data testing happened. Round 1 found a genuine shortfall.
+Round 2 (research + a ruled-out false lead) pointed at the data model.
+**Round 3 found and fixed two real bugs in the tracker and in this
+project's own crude test land mask** -- not in the underlying physics or
+the plan's approach -- and the result changed materially: from a jagged,
+knife-edge 2/16 with a chaotic 25-30-track visual, to a smooth, consistent
+result where the plan's own period definition (≥12s) now holds a real,
+geographically-sensible track (heading from mid-Atlantic toward Ireland,
+arriving right around the actual Dec 18 event) for **66h across 3,263km**
+-- short of the 72h bar, but by 6 hours, consistently, not by a wild
+margin. A looser (but still swept) parameter setting holds a different,
+independently-legitimate long-lived system for **90h across 3,611km**,
+clearing the bar outright. Per §8's own instruction ("Escalate this
+decision rather than deciding it unilaterally"), whether "66h, consistently,
+6h short" counts as close enough to proceed is your call, not an agent's --
+see the Round 3 section below for the full picture before deciding. Do not
+start Phase 0 until that decision is made.
 
 ### What the real clean-window data actually showed
 
@@ -109,6 +118,82 @@ useful example of not trusting a first result:
   learning from the `models=era5_ocean` failure -- see Bug 1 below). A
   fresh fetch with this is the next concrete step, not yet run.
 
+### Round 3: secondary swell data, and two real bugs found and fixed
+
+A user re-fetched with the updated script; `secondary_swell_wave_*` **is**
+supported by this model (122,160/134,736 non-null, same coverage as
+primary). Running it through the multi-component pipeline gave 4/16 --
+better than the original 2/16, and for the first time the degradation
+across the period-threshold sweep was *smooth* (96→90→78→78h passing at
+period=11/floor=20; a consistent 54-60h band failing at floor=40; 30-48h at
+period=13) instead of jagged. That was itself informative enough to keep
+investigating rather than stop at "4/16, still not robust."
+
+**Bug found: the tracker's position prediction was actively wrong for large
+clusters.** Traced the actual huge, obviously-real cluster underlying the
+Dec 18 event (79→118→137→159→180→195→164 cells across hours 150-186,
+clearly one coherent, growing-then-shrinking system by any visual
+inspection) through the tracker frame by frame. Clustering found it
+correctly every single frame. The *tracker* lost it: at hour 180, the
+predicted position was 468km from the actual cluster centroid -- 18km over
+the 450km match threshold -- because the physics-based prediction assumed
+the cluster would move in the direction implied by the energy-weighted mean
+of every member cell's reported wave direction (274° round trip that frame,
+implying near-due-east travel), while the cluster's actual centroid had
+moved almost due *south* between the two frames. A large region-grown
+blob's centroid motion reflects how its boundary reshapes (cells joining on
+one edge, aging out on another as period/energy cross the threshold
+locally) as much as it reflects bulk wave propagation -- these aren't
+guaranteed to point the same way. One bad prediction was enough to
+permanently lose a 150+ cell cluster's ID; a fresh ID picked it up next
+frame and the "story" restarted from zero.
+
+**Fix:** `tracking.py`'s `_predict_position` now extrapolates from the
+track's own last two observed centroid fixes (standard practice in general
+object tracking) when available, falling back to the physics-based
+group-velocity estimate only for a brand-new track with no observed
+velocity yet. This is not the "naive nearest-centroid" matching the plan
+warns against (which predicts zero movement) -- it uses the track's own
+recently observed velocity instead of an external physical assumption that
+turned out not to hold for large, reshaping clusters.
+
+**Bug found, second: this project's own crude land mask was wrong exactly
+where it mattered.** While tracing the fix above, `(58,-9)` and `(58,-8)` --
+real open ocean west of Scotland, in the path of a swell heading toward
+Ireland/Scotland -- turned out to be masked as "land" by `grid.py`'s
+original flat `lon >= -9 and lat <= 61` rule. Refined to a piecewise
+approximation that recedes east with latitude (still crude, still not for
+production -- see the file). Checked whether this was the cause of the
+remaining shortfall: it wasn't, for this specific case (the real swell
+period at that location genuinely drops from 13.8s to 12.1s hour to hour as
+it nears shore, a legitimate physical/data signal, not a masking artifact)
+-- but it was a real bug worth fixing regardless, and may matter for other
+events or the messy window.
+
+**Result after both fixes, at the plan's own period_threshold≥12s
+definition:** a track starting mid-Atlantic (46.6°N,-46.1°W) at hour 132
+moves consistently northeast -- 49.9°N,-36.9°W → 52.1°N,-27.7°W →
+50.4°N,-20.5°W (hour 168, almost exactly the real Dec 18 00:00 event time)
+→ 56.3°N,-13.6°W -- for **66 continuous hours across 3,263km**, ending as
+its measured period drops below 13s approaching the coast. That's a
+real, geographically-sensible, single-ID story arriving right when the
+actual event did. It's 6 hours short of the plan's 72h bar, consistently
+across all 8 period=13 parameter combinations (66h or 60h, never wildly
+off) -- not a knife-edge anymore. Separately, at period_threshold=11, a
+different (broader, likely storm-center-associated rather than
+forward-radiating-groundswell) system tracks cleanly for **90h across
+3,611km**, clearing the bar outright, at 2 of the 4 period=11/floor=20
+combinations (the other 2, at looser angular tolerance, hold a shorter
+72h/1,987km version of the same or a different track).
+
+**Net read:** this no longer looks like "the mechanic doesn't work." It
+looks like "the mechanic works and the remaining gap is a parameter/
+definition question" -- is a 6-hour, consistent shortfall against a
+72-hour bar that was itself a chosen round number, on n=1 real event, reason
+to keep tuning, loosen the bar, or call it close enough? That's a real
+judgment call, not something further code changes alone resolve -- see
+`PROGRESS.md` for the concrete options.
+
 ### Path here: two bugs hit and fixed before reaching this result
 
 **Bug 1 -- fetch returned 100% null values.** First real-data attempt came
@@ -175,25 +260,29 @@ Then: `python3 run_validation.py --real raw_clean.json raw_messy.json`
 (optionally `--smooth N` to test temporal smoothing, though see above --
 it didn't help on the one real window tested so far).
 
-## Results: real data (current, see status section above for the read)
+## Results: real data (current -- Round 3, with secondary swell + both bug fixes)
 
 ```
-2/16 parameter combinations passed both criteria (12%) -- non-robust, see above
+2/16 parameter combinations passed both criteria (12%) -- but see the Round 3
+section above: the numeric count alone undersells what changed. The failing
+combinations now cluster smoothly in a 60-66h band (period=13, the plan's
+own definition) instead of swinging wildly 24-78h, and one real, visually
+coherent, geographically-sensible track (mid-Atlantic to near Ireland,
+arriving right at the real event's timing) holds for 66h/3,263km -- 6h short
+of the bar, consistently, not by knife-edge luck. A different legitimate
+system clears the bar outright at 90h/3,611km under a looser (still swept)
+setting.
 ```
 
 `output/sweep_results.json`, `output/clean_centroid_paths.png`,
 `output/clean_clusters.gif`, `output/messy_centroid_paths.png`,
-`output/messy_clusters.gif` all reflect this specific real-data run (Dec
-11-24 2025 clean window, Sep 8-21 2025 messy window, single dominant
-component per cell -- i.e. the code as it stood before the "Round 2"
-multi-component change below). `output/clean_centroid_paths.png` in
-particular is worth opening directly -- it's the single clearest piece of
-evidence, showing the chaotic multi-track field described above. (The
-Round 2 multi-component checkpoint scored 0/16 on this same data, slightly
-worse -- see that section for why; `output/` was deliberately regenerated
-back to this more-informative 2/16 run rather than left on that interim
-result, since the actual point of Round 2 is the not-yet-tested
-secondary-swell fetch, not the swell/wind-sea split by itself.)
+`output/messy_clusters.gif` all reflect this current run (Dec 11-24 2025
+clean window, Sep 8-21 2025 messy window, multi-component clustering with
+secondary swell data, fixed tracker prediction, fixed land mask). Earlier
+rounds' numbers (2/16 pre-fix with a chaotic 25-30-track visual, 4/16 with
+secondary swell but the tracker bug still present) are described in the
+Round 2/3 narrative above rather than kept as separate output files --
+`output/` holds only the current, most-informative state.
 
 ## Results: synthetic data (superseded by real data above -- kept for the code-logic record)
 

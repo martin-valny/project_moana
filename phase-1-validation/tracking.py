@@ -12,7 +12,7 @@ merged_into), not bugs -- also per §4.5.
 """
 from dataclasses import dataclass, field
 
-from physics import destination_point, group_velocity_kmh, haversine_km
+from physics import bearing_deg, destination_point, group_velocity_kmh, haversine_km
 
 try:
     from scipy.optimize import linear_sum_assignment
@@ -56,9 +56,41 @@ class Track:
 
 
 def _predict_position(track, target_hour):
+    """Predict where this track's cluster will be at target_hour.
+
+    Prefers the track's own recently OBSERVED motion (its last two centroid
+    fixes) over the physics-derived group-velocity/direction estimate, once
+    there's enough history to compute it. Real-data testing found these can
+    diverge sharply for large clusters: the energy-weighted mean of each
+    member cell's reported wave direction is not the same thing as the
+    direction the region-grown blob's centroid actually drifts in, since
+    that shape is also reshaped each frame by cells aging in/out at its
+    edges as period/energy cross the threshold locally (dispersion, not
+    bulk translation). A single bad prediction from that mismatch was
+    enough to lose a genuinely 150+ cell, obviously-real, smoothly-evolving
+    cluster's track ID outright (observed 90-degree direction mismatch on
+    real Dec 2025 data). Observed-velocity extrapolation naturally captures
+    however fast/whichever direction the cluster has actually been moving,
+    including the large per-step jumps the plan warns naive nearest-
+    centroid matching breaks on -- it isn't "naive nearest centroid" (which
+    would predict zero movement), it's using the track's own last known
+    velocity instead of an external physical assumption about it.
+
+    Falls back to the physics-based estimate for a track with only one fix
+    (no observed velocity yet)."""
     hours_elapsed = target_hour - track.last_seen_hour
     if hours_elapsed <= 0:
         return track.centroid
+
+    if len(track.path) >= 2:
+        (h1, la1, lo1), (h2, la2, lo2) = track.path[-2], track.path[-1]
+        dt = h2 - h1
+        if dt > 0:
+            bearing = bearing_deg(la1, lo1, la2, lo2)
+            observed_speed_kmh = haversine_km(la1, lo1, la2, lo2) / dt
+            dist_km = observed_speed_kmh * hours_elapsed
+            return destination_point(la2, lo2, bearing, dist_km)
+
     cg_kmh = group_velocity_kmh(track.mean_period)
     travel_bearing = (track.mean_direction + 180) % 360
     dist_km = cg_kmh * hours_elapsed

@@ -22,8 +22,21 @@ def _rough_is_land(lat, lon):
     # Atlantic Canada / Newfoundland / Labrador
     if -70 <= lon <= -52 and 46 <= lat <= 58:
         return True
-    # Iberia, France, British Isles, Ireland (eastern edge of box)
-    if lon >= -9 and lat <= 61:
+    # Western Europe -- refined from a single flat "lon >= -9" rule after
+    # real-data testing showed it wrongly masked open ocean west of
+    # Scotland (e.g. 58N,-9W and 58N,-8W are real ocean, not land) and cut
+    # a genuinely-tracked swell short right as it approached that coast.
+    # Still crude, still not for production (see module docstring), but
+    # the coastline recedes east with latitude and this follows that:
+    if lat < 45 and lon >= -9:        # Iberia / NW Africa approach
+        return True
+    if 45 <= lat < 51 and lon >= -6:  # France / Biscay
+        return True
+    if 51 <= lat < 58 and lon >= -6:  # Ireland / Wales / England
+        return True
+    if 58 <= lat < 62 and lon >= -4:  # Scotland / Faroes
+        return True
+    if lat >= 62 and lon >= 3:        # Norway -- Norwegian Sea stays ocean
         return True
     # NW Africa
     if lat <= 35 and lon >= -9:
