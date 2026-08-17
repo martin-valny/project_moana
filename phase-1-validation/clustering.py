@@ -28,6 +28,10 @@ from physics import angular_diff
 _CELLS, _INDEX_OF = build_grid()
 
 
+def _default_neighbors(cell):
+    return neighbors_of(cell, _INDEX_OF)
+
+
 @dataclass
 class Cluster:
     cells: list
@@ -45,22 +49,29 @@ def _weighted_circular_mean(dirs_weights):
     return math.degrees(math.atan2(x, y)) % 360
 
 
-def _node_neighbors(node, cells_by_loc):
+def _node_neighbors(node, cells_by_loc, neighbor_fn):
     cell, idx = node
     out = []
     for other_idx in range(len(cells_by_loc[cell])):
         if other_idx != idx:
             out.append((cell, other_idx))
-    for nb_cell in neighbors_of(cell, _INDEX_OF):
+    for nb_cell in neighbor_fn(cell):
         for other_idx in range(len(cells_by_loc.get(nb_cell, ()))):
             out.append((nb_cell, other_idx))
     return out
 
 
 def cluster_frame(cell_records, period_threshold, energy_floor,
-                   angular_tolerance, period_tolerance, min_cluster_size):
+                   angular_tolerance, period_tolerance, min_cluster_size,
+                   neighbor_fn=None):
     """cell_records: {(lat,lon): record} or {(lat,lon): [record, ...]} for one
-    frame. Returns list[Cluster]."""
+    frame. Returns list[Cluster].
+
+    neighbor_fn: optional cell -> [neighbor cells] override, defaulting to
+    the North Atlantic grid.py. Pass global_grid.neighbors_of (bound to its
+    own index_of) to cluster over the real global, date-line-wrapping grid
+    instead -- see test_dateline.py."""
+    neighbor_fn = neighbor_fn or _default_neighbors
     cells_by_loc = {
         cell: (val if isinstance(val, list) else [val])
         for cell, val in cell_records.items()
@@ -84,7 +95,7 @@ def cluster_frame(cell_records, period_threshold, energy_floor,
         while queue:
             cur = queue.pop()
             cur_rec = candidates[cur]
-            for nb in _node_neighbors(cur, cells_by_loc):
+            for nb in _node_neighbors(cur, cells_by_loc, neighbor_fn):
                 if nb in visited or nb not in candidates:
                     continue
                 nb_rec = candidates[nb]
@@ -100,8 +111,14 @@ def cluster_frame(cell_records, period_threshold, energy_floor,
         if len(unique_cells) < min_cluster_size:
             continue
 
+        # Plain arithmetic mean for longitude breaks for a cluster spanning
+        # the international date line (179 and -179 average to 0, not
+        # +/-180) -- circular mean handles that the same way direction
+        # already does above.
         lat_c = sum(m[0] for m in unique_cells) / len(unique_cells)
-        lon_c = sum(m[1] for m in unique_cells) / len(unique_cells)
+        lon_c = _weighted_circular_mean([(m[1], 1.0) for m in unique_cells])
+        if lon_c > 180:
+            lon_c -= 360
         total_energy = sum(candidates[m]["energy"] for m in member)
         mean_period = sum(candidates[m]["swell_period"] * candidates[m]["energy"] for m in member) / total_energy
         mean_dir = _weighted_circular_mean(

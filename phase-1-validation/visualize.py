@@ -21,7 +21,19 @@ def _color_for_id(track_id):
     return f"#{h[:6]}"
 
 
-def run_and_plot(scenario, frames, params, out_dir):
+def _identity(lon):
+    return lon
+
+
+def run_and_plot(scenario, frames, params, out_dir, neighbor_fn=None,
+                  all_cells=None, lon_transform=None, xlim=None, ylim=None):
+    """all_cells/lon_transform let this work for a different grid (e.g.
+    pacific_grid.py) -- lon_transform is for PLOTTING ONLY (e.g. shifting
+    -180..-109 to 180..251 so a date-line-crossing region doesn't render
+    as split across the two edges of the plot); it never touches the real
+    coordinates used for clustering/tracking."""
+    all_cells = all_cells if all_cells is not None else _ALL_CELLS
+    lon_transform = lon_transform or _identity
     os.makedirs(out_dir, exist_ok=True)
     tracker = Tracker()
     frame_pngs = []
@@ -35,6 +47,7 @@ def run_and_plot(scenario, frames, params, out_dir):
             angular_tolerance=params["angular_tolerance"],
             period_tolerance=3.0,
             min_cluster_size=params["min_cluster_size"],
+            neighbor_fn=neighbor_fn,
         )
         prev_ids = {t.id: t for t in tracker.active}
         tracker.step(frame["hours"], clusters)
@@ -45,18 +58,23 @@ def run_and_plot(scenario, frames, params, out_dir):
                 cell_to_id[c] = t.id
         all_tracks_by_hour[frame["hours"]] = cell_to_id
 
+    all_lons = [lon_transform(c[1]) for c in all_cells]
+    all_lats = [c[0] for c in all_cells]
+    xlim = xlim or (min(all_lons) - 2, max(all_lons) + 2)
+    ylim = ylim or (min(all_lats) - 2, max(all_lats) + 2)
+
     for frame in frames:
         cell_to_id = all_tracks_by_hour[frame["hours"]]
         fig, ax = plt.subplots(figsize=(7, 6))
-        bg_lats = [c[0] for c in _ALL_CELLS if c not in cell_to_id]
-        bg_lons = [c[1] for c in _ALL_CELLS if c not in cell_to_id]
+        bg_lats = [c[0] for c in all_cells if c not in cell_to_id]
+        bg_lons = [lon_transform(c[1]) for c in all_cells if c not in cell_to_id]
         ax.scatter(bg_lons, bg_lats, s=4, c="#dddddd", zorder=1)
         for track_id in sorted(set(cell_to_id.values())):
             lats = [c[0] for c, tid in cell_to_id.items() if tid == track_id]
-            lons = [c[1] for c, tid in cell_to_id.items() if tid == track_id]
+            lons = [lon_transform(c[1]) for c, tid in cell_to_id.items() if tid == track_id]
             ax.scatter(lons, lats, s=22, c=_color_for_id(track_id), label=f"id {track_id}", zorder=2)
-        ax.set_xlim(-82, 2)
-        ax.set_ylim(18, 67)
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
         ax.set_title(f"{scenario} scenario -- hour {frame['hours']} (day {frame['hours']/24:.1f})")
         ax.set_xlabel("lon")
         ax.set_ylabel("lat")
@@ -71,7 +89,7 @@ def run_and_plot(scenario, frames, params, out_dir):
     _make_gif(frame_pngs, gif_path)
 
     tracker.finalize(frames[-1]["hours"])
-    _plot_centroid_paths(tracker.active + tracker.ended, scenario, out_dir)
+    _plot_centroid_paths(tracker.active + tracker.ended, scenario, out_dir, lon_transform, xlim, ylim)
 
     for p in frame_pngs:
         os.remove(p)
@@ -85,16 +103,19 @@ def _make_gif(png_paths, gif_path, duration_ms=250):
     frames[0].save(gif_path, save_all=True, append_images=frames[1:], duration=duration_ms, loop=0)
 
 
-def _plot_centroid_paths(tracks, scenario, out_dir):
+def _plot_centroid_paths(tracks, scenario, out_dir, lon_transform=None, xlim=None, ylim=None):
+    lon_transform = lon_transform or _identity
     fig, ax = plt.subplots(figsize=(7, 6))
     for t in tracks:
         if len(t.path) < 2:
             continue
         lats = [p[1] for p in t.path]
-        lons = [p[2] for p in t.path]
+        lons = [lon_transform(p[2]) for p in t.path]
         ax.plot(lons, lats, "-o", ms=3, c=_color_for_id(t.id), label=f"id {t.id} ({t.duration_hours():.0f}h)")
-    ax.set_xlim(-82, 2)
-    ax.set_ylim(18, 67)
+    if xlim:
+        ax.set_xlim(*xlim)
+    if ylim:
+        ax.set_ylim(*ylim)
     ax.set_title(f"{scenario} scenario -- centroid paths")
     ax.set_xlabel("lon")
     ax.set_ylabel("lat")

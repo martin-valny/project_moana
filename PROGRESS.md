@@ -185,6 +185,99 @@ Report back what fraction of the 4 events (including the original) clear
 shortfall pattern (if any) looks like the same "6h short, consistently" or
 something else each time -- that's the actual answer to the open question.
 
+## Round 5, also in progress: does this scale to real-time, whole-ocean tracking?
+
+User asked whether the mechanism works at the scale of scanning all oceans
+in real time, not just one basin. Split into what's a compute/cost question
+(answered without new data) and what's a genuine data-and-topology question
+(needs a real test):
+
+**Compute and cost -- fine, worked out from what's already known.**
+Clustering is near-linear in cell count (global ~7,500 cells vs. the ~450
+tested is a 15x jump, still sub-second per frame). Tracking's Hungarian
+assignment scales with concurrent track count, not grid size -- trivial
+even at 50-100 simultaneous global systems. "Real time" in the plan's own
+architecture (§4.3) already means a batch job every 3-6h, matching how
+often the underlying wave models refresh anyway, not literal streaming.
+Re-costed the API budget with the now-9 variables (secondary swell added in
+Round 3) at global scale, 6-hourly refresh: ~463K calls/month, still under
+half the $29/month Standard plan's 1M cap.
+
+**What was actually untested, and what's been done about it:**
+
+1. **Land masking.** The hand-rolled North Atlantic box (`grid.py`) took
+   real bug-hunting to get right for one basin (see Round 3) and was never
+   going to generalize. Replaced, for global/regional testing, with the
+   `global-land-mask` PyPI package -- real (Natural Earth-derived),
+   vectorized, computes the whole global grid in ~1ms, and correctly
+   resolves the exact west-of-Scotland bug found by hand in Round 3
+   without any manual boxes. New file: `global_grid.py`. `grid.py` itself
+   is untouched -- the already-validated North Atlantic results stay
+   reproducible on it exactly as before.
+2. **International date line wraparound -- a real bug, found and fixed.**
+   `grid.py`'s adjacency never needed to handle lon=180/-180 (the North
+   Atlantic box doesn't touch it). It doesn't wrap: a cell at lon=178 and
+   one at lon=-178 are neighbors on the real globe (2 degrees apart) but
+   were never connected. Confirmed this actually breaks tracking with a
+   synthetic test (`test_dateline.py`): a swell crossing the seam split
+   into two separate track IDs and lost 36h of continuity (180h with the
+   fix vs. 144h/split-into-two without it). Fixed in `global_grid.py`'s
+   neighbor lookup (wraps correctly) and in `clustering.py`'s cluster
+   centroid longitude averaging (a plain arithmetic mean of 179 and -179
+   gives 0, not ±180 -- switched to a circular mean, the same fix
+   already used for wave direction). `clustering.py`/`sweep.py`/
+   `visualize.py` also got a `neighbor_fn` parameter so a different grid
+   can be plugged in without touching the validated North Atlantic path
+   (confirmed no regression: North Atlantic real-data result unchanged,
+   2/16, same durations, only floating-point-level centroid differences
+   from the more correct longitude averaging).
+3. **Pole-adjacent grid density -- flagged, not fixed.** On a fixed-degree
+   grid, one longitude step is ~334km at the equator but only ~69km at
+   78°N/S. Tracking itself is latitude-independent (works in real km via
+   haversine throughout), but clustering granularity (what a "3-cell
+   cluster" physically represents) isn't consistent across latitudes.
+   Not fixed -- would mean a reduced/variable-resolution grid, real scope
+   creep beyond what was asked. Worth knowing before someone tunes global
+   parameters.
+4. **The big one: does tracking hold together over a REAL long-distance,
+   cross-hemisphere, date-line-crossing event, not just a synthetic one?**
+   Set up a test for the "7,000-mile swell" of July 2024 -- a real, widely
+   covered event (Surfline "7,000-Mile Swell Kicks Off July"): a storm off
+   New Zealand's Chatham Islands on Jul 8, 2024 generated 20s-period
+   groundswell that hit Tahiti Jul 10-11 (Code Red conditions at
+   Teahupo'o), Hawaii the following week, then California -- ~10,000km,
+   crossing both the equator and the date line, over ~2 weeks. New files:
+   `pacific_grid.py` (a ~1,200-cell region spanning New Zealand to
+   California, using the real land mask + date-line-aware adjacency) and
+   `test_pacific_event.py`. Smoke-tested the whole pipeline (fetch ->
+   cluster -> track -> plot) against a synthetic version of this exact
+   geometry first -- got a single continuous 114h/9,838km track crossing
+   both the seam and the equator cleanly -- before trusting it enough to
+   ask for real data.
+
+**Not yet fetched -- same reason as every other round, no internet here,
+and this one is bigger** (~1,200 cells vs. ~400, so noticeably slower):
+
+```bash
+cd phase-1-validation
+python3 -m pip install global-land-mask   # new dependency, needed for --grid pacific
+python3 fetch_real_data.py --window pacific_2024 --grid pacific
+```
+
+Hand back `raw_pacific_2024.json` (gitignored, `git add -f` it or send
+directly), then:
+
+```bash
+python3 test_pacific_event.py raw_pacific_2024.json
+```
+
+Prints the same 16-row pass table as the other event tests, plus a
+centroid-path plot worth looking at directly for whether the track
+visually crosses the date line (around lon 180 in the plot, which uses a
+shifted 0-360 longitude convention so the region doesn't render split
+across both edges) and the equator (lat 0) in one continuous piece, the
+way the synthetic smoke test did.
+
 ## Other open items from the master plan discussion (lower priority than Phase −1)
 
 These came up during planning but are **not blocking** — do not act on them
@@ -212,16 +305,22 @@ phase-1-validation/
   grid.py                 N. Atlantic ocean grid + crude land mask (synthetic-test only,
                            NOT for production -- see file header)
   synthetic.py             synthetic clean/messy swell field generator (code-logic validation)
-  clustering.py            §4.5 region-growing clustering
+  clustering.py            §4.5 region-growing clustering; accepts neighbor_fn to use a different grid (Round 5)
   tracking.py              §4.5 tracking + lineage; predicts from observed velocity when available (Round 3 fix)
   sweep.py                 16-combination parameter sweep + pass-criteria checks
-  visualize.py             GIF + centroid-path plots
+  visualize.py             GIF + centroid-path plots; accepts neighbor_fn/all_cells/lon_transform (Round 5)
   smoothing.py             temporal smoothing preprocessing -- tried, didn't help, kept for the record
-  fetch_real_data.py       real-data fetcher (run OUTSIDE this sandbox); probes for secondary swell support
+  fetch_real_data.py       real-data fetcher (run OUTSIDE this sandbox); probes for secondary swell; --grid pacific
   real_data.py             converts fetched real data into the pipeline's frame format; multi-component per cell
   diagnose_api.sh          isolates Open-Meteo request-parameter issues
   run_validation.py        CLI entry point -- synthetic (default) or --real, optional --smooth
-  output/                  current artifacts -- Round 3 REAL DATA result (2/16 but smooth/near-pass, see above)
+  test_event.py            tests one real North-Atlantic-grid event alone (Round 4)
+  global_grid.py           real global ocean grid (global-land-mask package) + date-line-aware adjacency (Round 5)
+  pacific_grid.py          NZ-to-California test region, real mask + date-line adjacency (Round 5)
+  test_dateline.py         synthetic date-line-crossing test -- found + verified the wraparound bug (Round 5)
+  test_pacific_event.py    tests the real July 2024 "7,000-mile swell" event (Round 5, not yet fetched)
+  output/                  current artifacts -- Round 3 North Atlantic REAL DATA result (2/16, near-pass, see above)
+  output_pacific_2024/     Pacific event results once fetched and tested (Round 5, doesn't exist yet)
   raw_clean.json           real fetched data, Dec 11-24 2025, incl. secondary swell (gitignored, local after fetch)
   raw_messy.json           real fetched data, Sep 8-21 2025, incl. secondary swell (gitignored, local after fetch)
 ```

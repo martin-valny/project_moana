@@ -338,6 +338,21 @@ if you want to see them again. Notes below are from that earlier run:
   plan's own guidance). A second, verified messy window would strengthen
   this result.
 
+## Beyond the North Atlantic: does this scale globally?
+
+This file covers the North Atlantic Phase -1 test specifically. Two
+follow-on efforts, both tracked in `PROGRESS.md` (not here, to keep this
+file's history focused): three more North Atlantic-region real events
+("Round 4," testing whether the 66h-vs-72h gap is typical or one event's
+luck), and a real global-scale question ("Round 5") -- a real land mask
+(swapped from this project's hand-rolled boxes to the `global-land-mask`
+package), a real international-date-line adjacency bug found and fixed
+(`grid.py`'s neighbor lookup never needed to wrap, since the North Atlantic
+box doesn't touch the seam), and a real long-distance test queued up
+against the actual July 2024 "7,000-mile swell" (New Zealand to
+California, crossing the equator and the date line). See `PROGRESS.md`'s
+"Round 5" section for the full detail and exact commands.
+
 ## Files
 
 | File | Purpose |

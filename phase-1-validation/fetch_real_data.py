@@ -32,16 +32,23 @@ the way the models=era5_ocean bug did.
   pip install requests
   python3 fetch_real_data.py --window clean   # Dec 11-24 2025, Mullaghmore
   python3 fetch_real_data.py --window messy    # a quiet shoulder-season week
+  python3 fetch_real_data.py --window pacific_2024 --grid pacific
+                                                # long-distance cross-basin
+                                                # test -- see --grid pacific
 
 Before trusting the "messy" window, sanity-check it against the raw
 significant-wave-height time series once fetched (per the master plan's own
 guidance) rather than assuming a news-quiet fortnight is data-quiet.
+
+--grid pacific uses pacific_grid.py instead of the North Atlantic grid.py --
+a much bigger region (~1,200 ocean cells vs ~400), so this fetch takes
+noticeably longer. Used for testing a real, documented long-distance,
+date-line-crossing, cross-hemisphere event end to end (see the
+pacific_2024 WINDOWS entry).
 """
 import argparse
 import json
 import time
-
-from grid import build_grid
 
 BASE_URL = "https://marine-api.open-meteo.com/v1/marine"
 CORE_VARIABLES = [
@@ -105,6 +112,15 @@ WINDOWS = {
     "clean4_nazare_jan2025": ("2025-01-22", "2025-02-04"),
         # Brackets Jan 25-30, 2025 -- Storm Herminia, Nazare, waves
         # reported over 20m.
+
+    "pacific_2024": ("2024-07-06", "2024-07-24"),
+        # The "7,000-mile swell": a storm off New Zealand's Chatham
+        # Islands on Jul 8 2024 generated 20s-period groundswell that hit
+        # Tahiti Jul 10-11 (Code Red conditions at Teahupo'o), Hawaii the
+        # following week, then California -- ~10,000km and crosses both
+        # the equator and the international date line. Use --grid pacific
+        # with this window. Widely covered (Surfline "7,000-Mile Swell
+        # Kicks Off July").
 }
 
 
@@ -132,15 +148,24 @@ def fetch_cell(session, lat, lon, start_date, end_date, variables, retries=3):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--window", choices=WINDOWS.keys(), required=True)
+    parser.add_argument("--grid", choices=["atlantic", "pacific"], default="atlantic",
+                         help="atlantic = North Atlantic box (grid.py, ~400 cells); "
+                              "pacific = long-distance cross-basin test region "
+                              "(pacific_grid.py, ~1,200 cells, slower fetch)")
     parser.add_argument("--out", default=None)
     parser.add_argument("--batch-sleep", type=float, default=0.2,
                          help="seconds between requests, be polite to the API")
     args = parser.parse_args()
 
     import requests
+    if args.grid == "pacific":
+        from pacific_grid import build_grid
+    else:
+        from grid import build_grid
     start_date, end_date = WINDOWS[args.window]
     cells, _ = build_grid()
     out_path = args.out or f"raw_{args.window}.json"
+    print(f"grid: {args.grid} ({len(cells)} ocean cells) -- this may take a while for pacific")
 
     session = requests.Session()
     optional = probe_optional_variables(session, cells[0][0], cells[0][1], start_date, end_date)

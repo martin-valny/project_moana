@@ -13,7 +13,7 @@
       "clean": {
         "passed": true,
         "best_duration_h": 90,
-        "best_dist_km": 3610.9549390734605
+        "best_dist_km": 3619.1542760448597
       },
       "messy": {
         "passed": true,
@@ -31,7 +31,7 @@
       "clean": {
         "passed": true,
         "best_duration_h": 90,
-        "best_dist_km": 3610.9549390734605
+        "best_dist_km": 3619.1542760448597
       },
       "messy": {
         "passed": true,
@@ -49,7 +49,7 @@
       "clean": {
         "passed": false,
         "best_duration_h": 72,
-        "best_dist_km": 1986.9074608302708
+        "best_dist_km": 1988.4174822002806
       },
       "messy": {
         "passed": true,
@@ -67,7 +67,7 @@
       "clean": {
         "passed": false,
         "best_duration_h": 72,
-        "best_dist_km": 1986.9074608302708
+        "best_dist_km": 1988.4174822002806
       },
       "messy": {
         "passed": true,
@@ -85,7 +85,7 @@
       "clean": {
         "passed": false,
         "best_duration_h": 48,
-        "best_dist_km": 1360.8432380532697
+        "best_dist_km": 1361.0396572379677
       },
       "messy": {
         "passed": true,
@@ -103,7 +103,7 @@
       "clean": {
         "passed": false,
         "best_duration_h": 48,
-        "best_dist_km": 1360.8432380532697
+        "best_dist_km": 1361.0396572379677
       },
       "messy": {
         "passed": true,
@@ -121,7 +121,7 @@
       "clean": {
         "passed": false,
         "best_duration_h": 48,
-        "best_dist_km": 1337.2735875004057
+        "best_dist_km": 1337.3940144304543
       },
       "messy": {
         "passed": true,
@@ -139,7 +139,7 @@
       "clean": {
         "passed": false,
         "best_duration_h": 48,
-        "best_dist_km": 1337.2735875004057
+        "best_dist_km": 1337.3940144304543
       },
       "messy": {
         "passed": true,
@@ -157,7 +157,7 @@
       "clean": {
         "passed": false,
         "best_duration_h": 66,
-        "best_dist_km": 3263.0126345624535
+        "best_dist_km": 3263.7224241709846
       },
       "messy": {
         "passed": true,
@@ -175,7 +175,7 @@
       "clean": {
         "passed": false,
         "best_duration_h": 66,
-        "best_dist_km": 3263.0126345624535
+        "best_dist_km": 3263.7224241709846
       },
       "messy": {
         "passed": true,
@@ -193,7 +193,7 @@
       "clean": {
         "passed": false,
         "best_duration_h": 66,
-        "best_dist_km": 3212.8243980168554
+        "best_dist_km": 3213.4281776440594
       },
       "messy": {
         "passed": true,
@@ -211,7 +211,7 @@
       "clean": {
         "passed": false,
         "best_duration_h": 66,
-        "best_dist_km": 3212.8243980168554
+        "best_dist_km": 3213.4281776440594
       },
       "messy": {
         "passed": true,
@@ -229,7 +229,7 @@
       "clean": {
         "passed": false,
         "best_duration_h": 66,
-        "best_dist_km": 3004.8040787384825
+        "best_dist_km": 3005.429242507916
       },
       "messy": {
         "passed": true,
@@ -247,7 +247,7 @@
       "clean": {
         "passed": false,
         "best_duration_h": 60,
-        "best_dist_km": 2650.72157030623
+        "best_dist_km": 2651.376887763219
       },
       "messy": {
         "passed": true,
@@ -265,7 +265,7 @@
       "clean": {
         "passed": false,
         "best_duration_h": 66,
-        "best_dist_km": 3036.3274011633257
+        "best_dist_km": 3036.882621597537
       },
       "messy": {
         "passed": true,
@@ -283,7 +283,7 @@
       "clean": {
         "passed": false,
         "best_duration_h": 60,
-        "best_dist_km": 2704.9585855143578
+        "best_dist_km": 2705.5457281516155
       },
       "messy": {
         "passed": true,

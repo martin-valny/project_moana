@@ -25,7 +25,7 @@ PARAM_GRID = [
 ]
 
 
-def run_scenario(scenario, params, frames=None):
+def run_scenario(scenario, params, frames=None, neighbor_fn=None):
     frames = frames if frames is not None else generate_frames(scenario)
     tracker = Tracker()
     clusters_per_frame = []
@@ -37,6 +37,7 @@ def run_scenario(scenario, params, frames=None):
             angular_tolerance=params["angular_tolerance"],
             period_tolerance=3.0,
             min_cluster_size=params["min_cluster_size"],
+            neighbor_fn=neighbor_fn,
         )
         clusters_per_frame.append(clusters)
         tracker.step(frame["hours"], clusters)
