@@ -89,6 +89,22 @@ WINDOWS = {
                                               # as the messy window. Swap the
                                               # dates here if it turns out
                                               # not to be messy.
+
+    # Three more real events, requested after Round 3's result (66h vs 72h,
+    # one event) to check whether that gap is typical or just this event's
+    # luck -- different storms, different seasons, one different target
+    # coast (Portugal instead of Ireland), across two winters.
+    "clean2_ireland_nov2023": ("2023-11-02", "2023-11-15"),
+        # Brackets Nov 9, 2023 -- Conor Maguire's "swell of the decade"
+        # session at Mullaghmore, widely covered (Surfer, RTE, WSL,
+        # Red Bull, Irish Times).
+    "clean3_nazare_feb2024": ("2024-02-18", "2024-03-02"),
+        # Brackets Feb 24, 2024 -- the giant Nazaré swell where Sebastian
+        # Steudtner rode a wave measured at 28.57m, a record-attempt ride.
+        # Different target coast (Portugal) from the other three windows.
+    "clean4_nazare_jan2025": ("2025-01-22", "2025-02-04"),
+        # Brackets Jan 25-30, 2025 -- Storm Herminia, Nazare, waves
+        # reported over 20m.
 }
 
 

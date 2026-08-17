@@ -134,30 +134,56 @@ real fetch came back ~91% non-null and the December 2025 event is clearly
 present in it. The shortfall described above is a real clustering/tracking
 result, not a leftover data problem.
 
-## If you want to pursue next steps yourself
+## Round 4, in progress: three more real events, to answer "is 66h typical or unlucky?"
 
-**Secondary swell data is already in use** (Round 3, done) — no need to
-re-fetch for that specifically. If you want to test a **second real event**
-(the most useful next diagnostic, per the "is 66h typical or unlucky"
-question above), add a new window to `WINDOWS` in `fetch_real_data.py` and
-fetch it the same way, on a machine with real internet access:
+User asked for three more real events to test, directly following from the
+question Round 3 raised. Three were researched and added to `WINDOWS` in
+`fetch_real_data.py` -- different storms, different seasons, one different
+target coast (Portugal instead of Ireland), across two winters:
+
+- `clean2_ireland_nov2023` (2023-11-02 to 2023-11-15): brackets Nov 9, 2023,
+  Conor Maguire's widely-covered "swell of the decade" session at
+  Mullaghmore -- same coast as the Round 1-3 event, different storm/year.
+- `clean3_nazare_feb2024` (2024-02-18 to 2024-03-02): brackets Feb 24, 2024,
+  the giant Nazaré swell where Sebastian Steudtner rode a wave measured at
+  28.57m. Different target coast (Portugal).
+- `clean4_nazare_jan2025` (2025-01-22 to 2025-02-04): brackets Jan 25-30,
+  2025, Storm Herminia, Nazaré, waves reported over 20m. Different storm,
+  same coast as the one above.
+
+A new script, `test_event.py`, runs the 16-combination sweep against a
+single fetched event and evaluates it against the clean-window bar (72h+/
+2000km+) without needing a paired messy window -- sanity-checked against
+the already-known Dec 2025 result (reproduces 2/16, 66h/3,263km at
+period=13, exactly as before) before being used for anything new.
+
+**Not yet fetched — this environment still has no internet access**, same
+as every previous round. Fetch on a machine with real internet access:
 
 ```bash
 cd phase-1-validation
-python3 fetch_real_data.py --window <your-new-window-name>
+python3 fetch_real_data.py --window clean2_ireland_nov2023
+python3 fetch_real_data.py --window clean3_nazare_feb2024
+python3 fetch_real_data.py --window clean4_nazare_jan2025
 ```
 
-Watch for the `probe:` line near the start — confirms secondary swell
-support (already known to work for this model, but worth re-confirming if
-anything about the request changes). Hand back the resulting `raw_*.json`
-(gitignored, so `git add -f` it or send directly), then:
+Each writes its own `raw_<window>.json` (the `--window` name is used as the
+output filename stem automatically). Hand all three back (gitignored, so
+`git add -f raw_clean2_ireland_nov2023.json raw_clean3_nazare_feb2024.json
+raw_clean4_nazare_jan2025.json` or send directly), then test each one:
 
 ```bash
-python3 run_validation.py --real raw_clean.json raw_messy.json
+python3 test_event.py raw_clean2_ireland_nov2023.json
+python3 test_event.py raw_clean3_nazare_feb2024.json
+python3 test_event.py raw_clean4_nazare_jan2025.json
 ```
 
-No extra flag needed — `real_data.py` automatically includes secondary
-swell as a separate clusterable candidate per cell if the fetch got it.
+Each prints its own 16-row pass table and writes `output_<name>/` with a
+GIF and centroid-path plot, same format as the original Dec 2025 test.
+Report back what fraction of the 4 events (including the original) clear
+72h/2000km at the plan's own period≥12s definition, and whether the
+shortfall pattern (if any) looks like the same "6h short, consistently" or
+something else each time -- that's the actual answer to the open question.
 
 ## Other open items from the master plan discussion (lower priority than Phase −1)
 

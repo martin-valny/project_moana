@@ -354,4 +354,5 @@ if you want to see them again. Notes below are from that earlier run:
 | `fetch_real_data.py` | real Open-Meteo historical marine data fetcher (not runnable in this sandbox); probes for secondary swell component support before the full fetch |
 | `real_data.py` | converts fetched real data into the pipeline's frame format; emits a record per available wave component per cell, not just the dominant one |
 | `run_validation.py` | CLI entry point, synthetic or real |
+| `test_event.py` | tests a single real event against the clean-window bar alone, no paired messy window needed -- used for Round 4's additional events |
 | `output/` | generated artifacts |
