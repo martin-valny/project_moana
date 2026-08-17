@@ -1,0 +1,295 @@
+{
+  "source": "SYNTHETIC DATA (code-logic validation only -- see README)",
+  "n_passed_both": 16,
+  "n_combinations": 16,
+  "rows": [
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 3
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 78,
+        "best_dist_km": 5481.920706000677
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 4
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 78,
+        "best_dist_km": 5481.920706000677
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 1
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 3
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 78,
+        "best_dist_km": 5481.920706000677
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 4
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 5
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 78,
+        "best_dist_km": 5481.920706000677
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 1
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 3
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 78,
+        "best_dist_km": 5556.267304234324
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 1
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 72,
+        "best_dist_km": 5256.246843962718
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 0
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 3
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 78,
+        "best_dist_km": 5556.267304234324
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 1
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 11.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 5
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 72,
+        "best_dist_km": 5256.246843962718
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 0
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 3
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 78,
+        "best_dist_km": 5481.920706000677
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 1
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 78,
+        "best_dist_km": 5481.920706000677
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 1
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 3
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 78,
+        "best_dist_km": 5481.920706000677
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 1
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 20.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 5
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 78,
+        "best_dist_km": 5481.920706000677
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 1
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 3
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 78,
+        "best_dist_km": 5556.267304234324
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 1
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 30.0,
+        "min_cluster_size": 5
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 72,
+        "best_dist_km": 5256.246843962718
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 0
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 3
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 78,
+        "best_dist_km": 5556.267304234324
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 1
+      },
+      "both_passed": true
+    },
+    {
+      "params": {
+        "period_threshold": 13.0,
+        "energy_floor": 40.0,
+        "angular_tolerance": 50.0,
+        "min_cluster_size": 5
+      },
+      "clean": {
+        "passed": true,
+        "best_duration_h": 72,
+        "best_dist_km": 5256.246843962718
+      },
+      "messy": {
+        "passed": true,
+        "max_simultaneous_clusters": 0
+      },
+      "both_passed": true
+    }
+  ]
+}
