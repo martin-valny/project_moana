@@ -80,10 +80,7 @@ The temptation during development will be to add "just one more panel" to expose
 
 Open-Meteo data is CC BY 4.0 and **requires a visible credit link wherever the data is displayed**. The entire globe displays the data, so this is a real constraint on a UI that forbids chrome.
 
-Decide the treatment in Phase 0, not later. Two acceptable options:
-
-- A hairline-weight credit at a screen edge, low contrast, always present.
-- A one-tap "About the data" panel, with a persistent but near-invisible affordance.
+**Decided (2026-08-17, Phase 0 build):** the two options weren't mutually exclusive, so both were used together — a hairline-weight "Data: Open-Meteo" credit sits permanently at a screen edge (satisfies "visible wherever the data is displayed" on its own, without waiting for a tap), and tapping it opens a one-tap "About the data" sheet with the full CC BY 4.0 credit and links. Implemented in `phase-0-prototype/src/components/Attribution.tsx`.
 
 Do not defer this. A legal requirement bolted on at Phase 5 will look bolted on.
 
@@ -477,6 +474,7 @@ narrative_description
 | 14 | **Rarity from physics, no gamification** | Southern Ocean crossings are rare by nature. Surfacing that honestly beats inventing badges. |
 | 15 | **Brand name deferred** | "Moana" is Disney territory. Nothing in Phase 0 depends on the name; codename and brand needn't match. Deferring costs nothing and avoids five turns of naming before any code exists. |
 | 16 | **Groundswell threshold revised 12s → 11s; Phase −1 passed** | Real-event Phase −1 validation (§12.2) across five events, two ocean regions: North Atlantic storms consistently needed period≥11s to track as one system for 72h+; a genuinely powerful Pacific crossing passed at the original ≥12s with large margins. Reads as event strength, not a wrong threshold — revised deliberately, not tuned after one failure, per §8's own anti-p-hacking design (write criteria down before looking at results). |
+| 17 | **Attribution treatment: hairline credit + one-tap sheet, combined** | §3.3 offered two options as alternatives; built Phase 0 with both — the hairline satisfies the legal "visible wherever displayed" bar unconditionally, the tap-through sheet gives room for the full CC BY 4.0 text and links without permanent chrome. See `phase-0-prototype/src/components/Attribution.tsx`. |
 
 ---
 

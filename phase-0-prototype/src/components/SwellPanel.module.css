@@ -1,0 +1,132 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: rgba(2, 4, 10, 0.35);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  pointer-events: auto;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.panel {
+  width: min(420px, calc(100% - 32px));
+  margin-bottom: 32px;
+  padding: 24px 24px 20px;
+  border-radius: 20px;
+  background: linear-gradient(165deg, rgba(14, 26, 44, 0.92), rgba(6, 12, 22, 0.94));
+  border: 1px solid rgba(150, 205, 230, 0.14);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  color: #eaf3f7;
+  font-family: inherit;
+  animation: slideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideUp {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(140, 210, 230, 0.7);
+  margin: 0 0 6px;
+}
+
+.name {
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+  font-style: italic;
+  font-size: 30px;
+  margin: 0 0 10px;
+  color: #f4fbff;
+  letter-spacing: 0.01em;
+}
+
+.narrative {
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: rgba(220, 236, 245, 0.78);
+  margin: 0 0 18px;
+}
+
+.meta {
+  display: flex;
+  gap: 18px;
+  margin-bottom: 20px;
+}
+
+.metaItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.metaLabel {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(160, 200, 215, 0.5);
+}
+
+.metaValue {
+  font-size: 15px;
+  color: #dff0f7;
+  font-variant-numeric: tabular-nums;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.followButton,
+.followButtonActive {
+  flex: 1;
+  appearance: none;
+  border: none;
+  border-radius: 14px;
+  padding: 13px 18px;
+  font-size: 14.5px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.3s ease;
+}
+
+.followButton:active,
+.followButtonActive:active {
+  transform: scale(0.97);
+}
+
+.followButton {
+  background: linear-gradient(135deg, #7fe8ff, #4fb6e0);
+  color: #05141f;
+}
+
+.followButtonActive {
+  background: rgba(150, 205, 230, 0.12);
+  color: #cdeaf5;
+  border: 1px solid rgba(150, 205, 230, 0.25);
+}
+
+.closeButton {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: rgba(220, 236, 245, 0.45);
+  font-size: 13px;
+  padding: 13px 10px;
+  cursor: pointer;
+  font-family: inherit;
+}

@@ -14,10 +14,156 @@ product vision and rules; this file is the build/validation log against it.
 
 ## Status, one line
 
-**Phase −1 is passed (decided 2026-08-17). The groundswell threshold is
-period≥11s (revised from the plan's original ≥12s). Phase 0 has not
-started yet.** Everything below explains how that conclusion was reached
-and what's available to build on.
+**Phase −1 is passed (decided 2026-08-17). Phase 0 (the visual-only
+prototype, `phase-0-prototype/`) is built and verified by automated means
+— it still needs the plan's actual falsifiable gate, five non-surfers
+timed on a physical phone, which no agent session can run itself.**
+Everything below explains how both conclusions were reached and what's
+available to build on.
+
+---
+
+## Phase 0: the visual-only prototype
+
+Per `MASTER_BUILD_PLAN.md` §8: no live data, no backend, one hardcoded
+fake swell ("Helena") crossing the North Atlantic on a cinematic globe, a
+time scrubber, tap-to-inspect, and locally-persisted Follow. Built in
+`phase-0-prototype/` — see that directory's own `README.md` for how to run
+it; this section is the narrative log of how it was built and what's
+still open.
+
+### Stack and why
+
+Vite + React + TypeScript + React Three Fiber (`@react-three/fiber` +
+`@react-three/drei` + `@react-three/postprocessing`), per §5.2's reversal
+of v1's instruction: author in a browser for fast iteration, judge on a
+physical phone, commit to the native Expo/RN stack only once the visual
+earns the porting cost. Nothing here touches Expo/React Native — that's
+deliberately out of scope until Phase 0 passes its own gate.
+
+### What was built
+
+- **Data contracts** (`src/data/types.ts`) mirroring §9.1's `SwellPulse`/
+  `SwellFieldFrame` shapes, so Phase 1+ can port the same types forward
+  rather than re-deriving them.
+- **Helena** (`src/data/helena.ts`): 20 hand-authored waypoints, roughly
+  every 6 hours over a 114-hour span, from mid-Atlantic generation
+  (39.8°N,-52°W) to landfall on Ireland's west coast (54.3°N,-8.5°W).
+  Height/period rise through the mid-ocean crossing and ease near shore
+  (loosely modelled on the real shoaling signal noted in this file's
+  Phase −1 section, but every number is invented for this prototype, not
+  sourced from data). `energy` is always derived as H²×T per §4.4, never
+  hand-picked. The whole path is anchored to app-load time, so "Now" in
+  the scrubber always lines up with whenever someone actually opens it,
+  not a fixed historical date.
+- **The globe** (`src/three/`): a dark-navy sphere with a cobalt/cyan
+  fresnel rim, an ambient "living ocean" particle field (~3,200
+  simplex-noise-driven points, deliberately dimmer than Helena's own
+  trail — not data-driven, exists purely to sell "a living ocean" per
+  §2.3 step 3), and Helena's own path rendered as a brighter, tappable
+  trail + pulsing marker. Bloom + vignette postprocessing, `OrbitControls`
+  with slow autorotate and damping for a tactile feel.
+- **Time scrubber** (Now / Tomorrow / 3 Days): moves only Helena's
+  displayed position via linear interpolation between her waypoints
+  (`src/data/interpolate.ts`, with circular interpolation for compass
+  bearings so it doesn't break at the 350°→10° wrap). Nothing else in the
+  scene reacts to it, per §8's explicit constraint.
+- **Tap-to-inspect** (`SwellPanel`): tapping Helena's marker opens a
+  minimal panel — category/basin eyebrow, name in an italic serif ("the
+  legend on a poster register," §3.1), one-line narrative, Follow button.
+  Raw numbers (height/period/position) stay behind an explicit "Details"
+  toggle inside the same panel — §6.1's "only place raw numbers are
+  permitted, and only on deliberate request."
+- **Follow persistence** (`src/hooks/useFollow.ts`): `localStorage`
+  standing in for §9.2's AsyncStorage requirement, since this prototype is
+  authored on web per §5.2 — same key/shape, a trivial swap when this
+  ports to Expo. Verified surviving reload via an automated check (below).
+- **Attribution — the §3.3 decision, made here as instructed**: the plan
+  offered two options (a permanent hairline credit, or a one-tap "About
+  the data" panel) as if choosing between them. They aren't mutually
+  exclusive, so both were built together — a permanent low-contrast
+  "Data: Open-Meteo" credit at the bottom-right corner (which alone
+  already satisfies CC BY 4.0's "visible wherever the data is displayed"),
+  that expands into a one-tap sheet with the full credit, CC BY 4.0 link,
+  and a note that Phase 0 itself has no live data yet. Documented in
+  `MASTER_BUILD_PLAN.md` §3.3 and decision-log row 17.
+- **Opening line**: "The ocean is moving." (§2.3 step 2), fading in on
+  load, no login wall, no onboarding carousel — the app opens directly
+  into the globe.
+
+### Two real bugs found and fixed while building this
+
+Both are documented in more detail in `phase-0-prototype/README.md`, worth
+repeating here since they're the kind of thing that would otherwise get
+rediscovered:
+
+1. **Ambient field point size was ~15-20x too large.** The point-size
+   formula's distance-scale constant was copied from an unverified
+   assumption rather than derived from the actual camera/scene geometry.
+   Result: thousands of huge overlapping additive-blended blobs, which
+   bloom then turned into a solid moiré/scale-pattern mess covering the
+   entire globe — nothing like the intended soft drifting points. Caught
+   by actually rendering a screenshot rather than trusting a clean build,
+   fixed by rederiving the constant from the real camera-to-surface
+   distance and adding a `uPixelRatio` uniform.
+2. **The base globe was nearly invisible.** `meshStandardMaterial` with a
+   near-black colour under three.js's physically-correct light units
+   needs much higher light intensities than the scene had; at the
+   original settings the "planet" barely differed from the background.
+   Fixed by replacing it with a small self-contained shader (soft-wrapped
+   Lambertian + a tight specular highlight, fixed light direction) so the
+   look doesn't depend on getting global light-intensity units right.
+   Also had to pull the camera back and lift the ambient field's radius a
+   fraction above the opaque sphere's — it was being intermittently
+   z-fought away by the opaque globe at first, and the initial camera
+   framing had the sphere filling the entire viewport with no visible
+   "planet in space" silhouette.
+
+Both were caught by actually screenshotting the running build (Playwright
+against `npm run preview`, headless Chromium) rather than trusting a clean
+`tsc`/`vite build` — neither bug produced a build error or a console
+error; the app "worked," it just didn't look like anything close to the
+design brief.
+
+### Verified, and how
+
+No physical phone or human testers were available in this session, so
+verification stopped at what automation can actually confirm:
+
+- `npm run build` (typecheck + production build) and `npm run lint`
+  (oxlint) both clean.
+- A Playwright smoke test (`phase-0-prototype/smoke-test.mjs`) against the
+  built app in headless Chromium (iPhone-sized viewport): zero console/page
+  errors, taps Helena's marker and confirms the panel opens with her name,
+  clicks Follow and confirms `localStorage` persists
+  `["helena-phase0"]`, drag-rotates the globe and confirms the view
+  actually changes, moves the time scrubber to "3 Days" and confirms
+  Helena's rendered position changes, opens the attribution sheet and
+  confirms its content.
+- Manual visual review of six screenshots at each of those states (dark
+  navy palette, no red/orange/heat-map colours anywhere, no
+  dashboard/table/chart chrome, minimal panel matching §2.3 step 5).
+
+### What's still open — the actual gate
+
+**The falsifiable test in §8 has not been run**: *"hand the phone to five
+people who don't surf, say nothing, and time whether they rotate the globe
+unprompted for 30+ seconds."* This requires physical devices and real
+people in the room, which is outside what any agent session can do itself.
+Automated verification above (build/lint/smoke-test/screenshots) confirms
+the prototype is functionally correct and structurally on-brief; it is
+**not** a substitute for the actual human test, and Phase 0 should not be
+declared "passed" until that test happens. Recommended next step for
+whoever picks this up: `cd phase-0-prototype && npm install && npm run
+dev`, load it on a phone on the same network, and run the test as
+specified.
+
+Also not yet done, lower-priority than the human test: no dynamic/battery
+adaptive-quality logic (§5.3's "adaptive quality" is scoped to the mobile
+build, not required for a web-authored Phase 0 prototype, but worth a
+reminder it's not here yet); the production JS bundle is ~1.2MB
+un-code-split (fine for a local prototype, would want addressing before
+any real deployment).
 
 ---
 
@@ -357,15 +503,22 @@ confirmed the existing decision rather than changing it.
 
 ## What's next
 
-**Phase 0** (`MASTER_BUILD_PLAN.md` §8): the visual-only prototype. No
-live data, no backend. Hard-code one fake swell path ("Helena") crossing
-the North Atlantic as local TypeScript data; full cinematic globe per §3;
-time scrubber moving the hard-coded path only; **Follow** persisted
-locally (AsyncStorage); decide the Open-Meteo attribution treatment (§3.3)
-here. Judged by a falsifiable test, not vibes: hand the phone to five
-people who don't surf, say nothing, and time whether they rotate the globe
-unprompted for 30+ seconds. This is independent of everything above — it
-doesn't consume the validation harness or the fetched data at all.
+**Phase 0 is built** (`phase-0-prototype/`, see the section above) but
+**not yet passed** — it's blocked on the one thing no agent session can do
+itself: handing a phone to five non-surfers and timing whether they rotate
+the globe unprompted for 30+ seconds. Whoever picks this up next should
+run that test before treating Phase 0 as cleared and moving to Phase 1. If
+it fails, §8 says iterate on shaders/motion/typography rather than adding
+data complexity to compensate.
+
+**Once Phase 0 actually passes, Phase 1** (`MASTER_BUILD_PLAN.md` §8):
+global marine data ingestion — the scheduled job writing static JSON to
+object storage, built against the full global grid from the start, with
+derived energy/direction sanity-checked against a known real event before
+anything downstream trusts it. This is independent of the Phase −1
+validation harness above — it doesn't consume or reuse that code, only the
+now-settled ≥11s threshold and the general clustering/tracking approach it
+validated.
 
 **Lower-priority open items**, not blocking, listed in
 `MASTER_BUILD_PLAN.md` §12:

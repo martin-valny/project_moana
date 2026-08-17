@@ -1,0 +1,74 @@
+.hairline {
+  position: fixed;
+  right: 14px;
+  bottom: 10px;
+  z-index: 5;
+  pointer-events: auto;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: rgba(180, 210, 225, 0.32);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 6px 4px;
+  transition: color 0.3s ease;
+}
+
+.hairline:hover {
+  color: rgba(200, 225, 235, 0.6);
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(2, 4, 10, 0.55);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.sheet {
+  width: min(420px, calc(100% - 32px));
+  margin-bottom: 32px;
+  padding: 22px 24px;
+  border-radius: 18px;
+  background: linear-gradient(165deg, rgba(14, 26, 44, 0.95), rgba(6, 12, 22, 0.97));
+  border: 1px solid rgba(150, 205, 230, 0.14);
+  color: rgba(225, 238, 245, 0.85);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.sheet h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #eaf6fb;
+}
+
+.sheet a {
+  color: #7fe8ff;
+  text-decoration: none;
+}
+
+.sheet a:hover {
+  text-decoration: underline;
+}
+
+.sheetClose {
+  margin-top: 16px;
+  appearance: none;
+  border: 1px solid rgba(150, 205, 230, 0.25);
+  background: transparent;
+  color: rgba(225, 238, 245, 0.85);
+  border-radius: 10px;
+  padding: 9px 16px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  width: 100%;
+}
