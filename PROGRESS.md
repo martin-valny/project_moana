@@ -51,25 +51,60 @@ synthetic generator made the messy scenario pass trivially by producing
 almost no detectable clusters at all — recalibrated to force genuine
 simultaneity).
 
+## A real-data attempt already happened once — read this before re-running
+
+A user ran the fetch on their own Mac and pushed back `raw_clean.json` /
+`raw_messy.json`. Running `run_validation.py --real` against them gave
+0/16 parameter combinations passing — but **that was not a real Phase −1
+result.** Every single value in both files was `null` (0 non-null out of
+134,736 in each). The clustering code correctly found nothing because
+there was nothing to find; the bug was in the fetch, not the algorithm.
+
+Root cause (found with `diagnose_api.sh`): `fetch_real_data.py` was
+passing `models=era5_ocean` to the Open-Meteo marine endpoint. That's not
+a valid model slug for this endpoint — the API returned HTTP 200 with
+`hourly_units` showing `"undefined"` for every variable and silently
+null-filled data, no error thrown. Confirmed by testing the same request
+with `models` omitted entirely: real units (`"m"`, `"s"`) came back, for
+both a recent 3-day window and the actual Dec 2025 historical window. The
+API appears to auto-select forecast vs. archive data by date range on its
+own when `models` isn't specified.
+
+**This has been fixed** in `fetch_real_data.py` (the `models` param is
+gone) and the script now checks its own output and warns loudly instead of
+writing a silently-empty file. The bad `raw_clean.json` / `raw_messy.json`
+were removed from git tracking (still `.gitignore`d, as originally
+intended — they'd only been force-added to hand them over once). **The
+corrected fetch has not been re-run yet.** If you find copies of those
+files anywhere outside git, don't reuse them — regenerate.
+
 ## Exactly what to run next
 
-**Step 1 — fetch real data.** Run this somewhere with actual internet
-access (your own machine, a CI job, or a Claude Code environment configured
-with a permissive network policy — NOT a fresh session in this same kind of
-sandboxed environment unless its network policy is confirmed open first):
+**Step 1 — re-fetch real data with the fixed script.** Run this somewhere
+with actual internet access (your own machine, a CI job, or a Claude Code
+environment configured with a permissive network policy — NOT a fresh
+session in this same kind of sandboxed environment unless its network
+policy is confirmed open first):
 
 ```bash
 git clone <this repo>
 cd project_moana
 git checkout claude/moana-master-build-plan-v2-zjs07y
+git pull
 cd phase-1-validation
-pip install requests
+python3 -m pip install requests   # or: pip3 install requests
 python3 fetch_real_data.py --window clean    # Dec 11-24 2025
 python3 fetch_real_data.py --window messy    # Sep 8-21 2025 -- UNVERIFIED, see below
 ```
 
+Each run now ends by printing `swell_wave_height: X/Y non-null values`. If
+`X` is 0, or you see the `*** WARNING ***` line, stop — do not proceed to
+Step 3 with that file. Something is still wrong with the request and needs
+diagnosing (`diagnose_api.sh` again, or check what changed).
+
 This produces `raw_clean.json` and `raw_messy.json` (gitignored — hand them
-back rather than expecting them in the repo).
+back rather than expecting them in the repo, e.g. via `git add -f` and a
+push like last time, or send the files directly).
 
 **Step 2 — validate the messy window before trusting it.** The "messy"
 date range (Sep 8-21, 2025) is an unverified placeholder — picked as a

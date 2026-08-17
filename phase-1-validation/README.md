@@ -5,14 +5,35 @@ produces satisfying, discrete, persistent characters *before* building
 anything else. Deliverable is throwaway code, per the plan -- a script
 here rather than a notebook, but the same "no app code, no shaders" spirit.
 
-## Status: code validated on synthetic data. Real data not yet run.
+## Status: code validated on synthetic data. First real-data fetch attempt failed (fixed, re-fetch pending).
 
-**This environment cannot reach the internet.** Direct test confirmed
+**This environment cannot reach the internet**, confirmed by direct test:
 `open-meteo.com`, `noaa.gov`, and even `google.com` all reject at this
 session's network proxy with 403 (organization policy, not a transient
 failure -- see `/root/.ccr/README.md`). Only package registries (PyPI, npm)
-are allowlisted. So the actual Phase -1 test -- real ERA5/Open-Meteo data
-for a real North Atlantic winter -- has not run yet. What's here instead:
+are allowlisted, so real-data fetching has to happen on a machine with
+actual internet access, then the result handed back.
+
+**That happened once already, and the first attempt came back empty.** A
+user ran `fetch_real_data.py` locally and got two files where *every single
+value, for every cell, for both windows, was `null`* -- 0 non-null values
+out of 134,736 for each file. Running the clustering pipeline against that
+data correctly found nothing, because there was nothing there -- **this was
+not a Phase -1 failure, it was a broken API request.** Root cause, found via
+`diagnose_api.sh`: the fetcher passed `models=era5_ocean`, which isn't a
+valid model slug for this endpoint -- the API returned HTTP 200 with
+`hourly_units` showing `"undefined"` for every variable and silently
+null-filled arrays, no error. Omitting `models` entirely (confirmed against
+both a recent 3-day window and the actual Dec 2025 historical window) returns
+real units (`"m"`, `"s"`) and lets the API auto-select forecast vs. archive
+data by date range. `fetch_real_data.py` has been fixed to drop that param,
+and now also refuses to write a file, or at least warns loudly, if a fetch
+comes back all-null -- so this failure mode can't go unnoticed again. The
+corrected fetch has not been re-run yet. **Do not trust `raw_clean.json` /
+`raw_messy.json` if you find old copies lying around outside this repo --
+regenerate them with the current version of the script.**
+
+What's here otherwise:
 
 1. A synthetic swell-field generator (`synthetic.py`) standing in for real
    data, built to genuinely stress-test the algorithm: a fast-moving,
@@ -33,10 +54,9 @@ for a real North Atlantic winter -- has not run yet. What's here instead:
 4. Visualization (`visualize.py`) -- per-frame scatter colored by track ID,
    stitched to GIF, plus centroid-path plots, for the blind-read test.
 5. A ready-to-run fetcher (`fetch_real_data.py`) for real historical marine
-   data via Open-Meteo's archive/era5_ocean mode, and an adapter
-   (`real_data.py`) that turns its output into the same frame format the
-   synthetic generator produces -- so the whole pipeline is a drop-in swap
-   once real data exists.
+   data, and an adapter (`real_data.py`) that turns its output into the same
+   frame format the synthetic generator produces -- so the whole pipeline is
+   a drop-in swap once real data exists.
 
 **What this does and doesn't prove:** it proves the clustering/tracking
 *code* is logically correct and behaves sensibly under conditions designed
@@ -51,9 +71,12 @@ itself passing.
 ## How to get real data flowing
 
 Pick one:
-- Run `fetch_real_data.py` somewhere with normal internet access (your
-  machine, CI, a Claude Code environment with a permissive network
-  policy), then hand back `raw_clean.json` / `raw_messy.json`.
+- Run `fetch_real_data.py` (the fixed version) somewhere with normal
+  internet access (your machine, CI, a Claude Code environment with a
+  permissive network policy), then hand back `raw_clean.json` /
+  `raw_messy.json`. The script now prints a non-null value count and warns
+  loudly if the fetch came back empty -- don't hand back a file it warned
+  about.
 - Grant this environment broader egress and re-run from here.
 
 Then: `python3 run_validation.py --real raw_clean.json raw_messy.json`
