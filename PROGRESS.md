@@ -2,448 +2,428 @@
 
 Last updated: 2026-08-17, branch `claude/moana-master-build-plan-v2-zjs07y`.
 
-This file exists so a new agent picking up this repo cold can tell the user
-exactly what's happened and what decision is needed next, without
-re-deriving context. Read this before doing anything else in this repo.
+This file is a complete handoff record: what was done, how, what worked,
+why, and what's next — written so a new agent (or the user, cold) can pick
+up without re-reading the whole conversation history that produced it.
 
-**The full plan this file references by section number (§4.5, §8, etc.) is
-`MASTER_BUILD_PLAN.md` at the repo root.** Read that file too; this one
-assumes it as background.
+**The full plan this file references by section number (§4.4, §8, etc.) is
+`MASTER_BUILD_PLAN.md` at the repo root.** Read that file first for the
+product vision and rules; this file is the build/validation log against it.
 
-## Where the project stands — READ THIS FIRST
+---
 
-**DECIDED (2026-08-17): Phase −1 has passed. Phase 0 may begin.**
+## Status, one line
 
-The groundswell threshold is revised from the plan's original period≥12s
-to **period≥11s** (updated in `MASTER_BUILD_PLAN.md` §4.4, decision logged
-in §11 row 16, full reasoning in §12.2). This was a deliberate, evidence-based
-revision, not a quiet tuning-until-it-passes: five independent real events
-across two ocean regions and multiple years were tested before the call was
-made, per the plan's own §8 instruction to write pass criteria down before
-looking at results (see the exchange with the user that closed this out,
-below the evidence, if you want the reasoning in full).
+**Phase −1 is passed (decided 2026-08-17). The groundswell threshold is
+period≥11s (revised from the plan's original ≥12s). Phase 0 has not
+started yet.** Everything below explains how that conclusion was reached
+and what's available to build on.
 
-**The evidence that closed it out:**
+---
 
-- **Four North Atlantic events** (two coasts, two winters) clear
-  72h/2,000km consistently only at period≥11s (3 of 4 pass every swept
-  combination; the 4th misses by 0.6% on distance alone at the original
-  ≥12s). At the literal ≥12s, 0 of 4 passed.
-- **One real long-distance Pacific event** — the plan's own §4.6 "epic,
-  10-day, 10,000km" scenario, for real: a storm off New Zealand's Chatham
-  Islands whose swell reached Tahiti, Hawaii, and California in July 2024
-  — passed 16/16 **at the original ≥12s**, no loosening needed. The
-  winning track held 222 continuous hours across 9,756km, crossing the
-  equator, landing almost exactly on the real event's independently
-  reported ~10,000km distance to California.
+## What Phase −1 was and why it mattered
 
-Read together: the North Atlantic near-misses were about event strength,
-not a wrong threshold in general. A genuinely powerful system passes at the
-plan's original number with huge margin; weaker North Atlantic storms
-needed the 1-second loosening. That's why the revision is scoped as a
-threshold change, not a rethink of the mechanism.
+Per `MASTER_BUILD_PLAN.md` §8: before writing any app code, prove that real
+marine forecast data clusters into discrete, trackable, nameable "swell"
+objects — a coherent system that holds one identity from mid-ocean
+detection to coastal arrival — rather than a fuzzy, constantly-fragmenting
+field. If that doesn't hold, the entire product concept ("adopt a swell,
+watch it travel, watch it arrive") has no foundation. The plan's own §0
+rule: *"Building Phase 0 before Phase −1 passes is the single most
+expensive mistake available."*
 
-**Next step:** Phase 0 (§8) — the visual-only prototype, hard-coded fake
-swell path, five-non-surfers falsifiable test. Nothing about Phase 0's
-scope changes because of this validation work; it was always meant to be
-independent of the real data pipeline. See "Round 4 result" and "Round 5
-result" below for the full tables. Full technical detail for the original
-Dec 2025 event specifically is in `phase-1-validation/README.md`.
+The plan specified concrete, falsifiable pass criteria (§8):
+- **Clean window** (a real, documented big-swell event): at least one
+  cluster holds a stable ID for 72+ hours and travels 2,000+ km.
+- **Messy window** (an unremarkable period): no more than ~5 simultaneous
+  clusters in a typical frame — otherwise there's no "one thing" to adopt.
+- **Robustness**: a *range* of clustering parameters should pass, not one
+  knife-edge setting — the plan explicitly calls a single lucky setting a
+  failure signal in itself, not a pass.
+- **Blind read**: show the result to someone with no context and time
+  whether they can say "how many things are moving, can I follow one."
 
-**History (round 1 → 3, single-event basis, before the 4-event picture
-below existed):**
+## What was built: `phase-1-validation/`
 
-**Round 1:** the real December 18, 2025 Mullaghmore event is genuinely and
-hugely present in the fetched data (10.6m/13.5s peak, correctly timed), but
-at the plan's own groundswell definition (period ≥12s) the longest track
-held only 36h/1,814km — well under 72h/2,000km — and a fine period sweep
-gave a jagged, non-monotonic result (78h→42h→36h→24h→42h), the plan's own
-named signature of a knife-edge rather than a robust pass. The one
+A throwaway validation harness (script-based rather than a notebook, but
+the same disposable spirit the plan asks for):
+
+| File | Purpose |
+|---|---|
+| `physics.py` | haversine distance, bearing, great-circle interpolation, deep-water group velocity (Cg = 1.56×T) |
+| `grid.py` | North Atlantic ocean grid (20-65N, 80W-0, 2°×3°), hand-rolled land mask — synthetic-test only, not for production |
+| `synthetic.py` | synthetic "clean"/"messy" swell field generator, used before real data was available |
+| `clustering.py` | §4.5 region-growing clustering; operates on multiple simultaneous wave components per cell (swell/wind-sea/secondary-swell), not one collapsed value; accepts a `neighbor_fn` override to run on a different grid |
+| `tracking.py` | §4.5 tracking with lineage (merge/split via `parent_id`/`merged_into`); predicts each track's next position from its own last-observed velocity when available, falling back to a physics estimate for brand-new tracks |
+| `sweep.py` | 16-combination parameter sweep (period threshold, energy floor, angular tolerance, min cluster size) + pass-criteria evaluation |
+| `visualize.py` | per-frame scatter → GIF, plus centroid-path plots, for the blind-read test; supports a different grid/region and a longitude-shift for plotting across the date line |
+| `smoothing.py` | temporal smoothing preprocessing — tried as a fix, **didn't help**, kept for the record |
+| `fetch_real_data.py` | fetches real Open-Meteo marine data (run *outside* this environment — see "Environment constraints" below); probes for secondary-swell support; `--grid pacific` for the larger Pacific region |
+| `real_data.py` | converts fetched JSON into the pipeline's frame format; emits one record per available wave component per cell (not just the dominant one) |
+| `diagnose_api.sh` | isolates Open-Meteo request-parameter issues (built to debug the all-null fetch bug, see below) |
+| `run_validation.py` | CLI entry point: synthetic (default) or `--real clean.json messy.json`, optional `--smooth N` |
+| `test_event.py` | tests one real North-Atlantic-grid event alone against the clean-window bar, no paired messy window needed |
+| `global_grid.py` | real global ocean grid using the `global-land-mask` package + date-line-aware adjacency |
+| `pacific_grid.py` | New Zealand-to-California test region, same real mask + date-line adjacency |
+| `test_dateline.py` | synthetic test that found and verified the date-line wraparound bug (see below) |
+| `test_pacific_event.py` | tests the real July 2024 Pacific event |
+
+Six real datasets are fetched and present in the repo (large JSON files,
+`.gitignore`d by pattern but force-added since they're the actual
+evidence): `raw_clean.json` (Dec 2025), `raw_clean2_ireland_nov2023.json`,
+`raw_clean3_nazare_feb2024.json`, `raw_clean4_nazare_jan2025.json`,
+`raw_messy.json` (Sep 2025), `raw_pacific_2024.json`. Each has a matching
+`output*/` directory with its sweep results, a cluster-animation GIF, and a
+centroid-path plot.
+
+## Environment constraints that shaped the process
+
+Two things made this slower than it should have been, both worth knowing
+before repeating this kind of work:
+
+1. **This session's sandbox has no general internet access.** Confirmed by
+   direct test — `open-meteo.com`, `noaa.gov`, even `google.com` reject at
+   the network proxy with 403 (org policy, not transient). Every real
+   fetch in this project was done by the user on their own Mac, with the
+   resulting JSON handed back via `git add -f` + push. `WebSearch`/
+   `WebFetch` tools worked for research (routed differently), but direct
+   API calls did not.
+2. **The obvious fetch parameters were wrong the first time.** See "Bug 1"
+   below — this cost a full round-trip before any real validation could
+   start.
+
+## The investigation, in order: what was done, what worked, why
+
+### 1. Code-logic validation on synthetic data (before any real fetch)
+
+Built a synthetic swell-field generator designed to stress-test the
+algorithm honestly: a fast, realistic-group-velocity "hero" pulse crossing
+most of the North Atlantic basin, an unrelated secondary pulse (to check
+distinct systems don't get merged), wind-sea clutter, and a "messy"
+scenario with several short-lived systems including three
+deliberately-overlapping ones (to force genuine simultaneity, since an
+earlier version of this generator passed trivially by producing almost no
+detectable clusters — caught and fixed before it could give false
+confidence).
+
+**Result: 16/16 parameter combinations passed.** This proved the
+clustering/tracking *code* was logically correct under controlled
+conditions. It proved nothing about the real product assumption — that
+required real data.
+
+### 2. Bug 1 — the first real fetch came back 100% null
+
+A user ran the fetcher and got two files where *every single value, for
+every cell, for both windows,* was `null` (0 non-null out of 134,736 in
+each). Root cause, found with `diagnose_api.sh`: the fetcher passed
+`models=era5_ocean` to Open-Meteo's marine endpoint — not a valid model
+slug for it. The API returned HTTP 200 with `hourly_units` showing
+`"undefined"` for every variable and silently null-filled arrays, no
+error. **Fix:** drop the `models` param entirely; the API auto-selects
+forecast vs. archive data by date range on its own (confirmed against both
+a recent window and the actual historical window). `fetch_real_data.py`
+now also self-checks its output and warns loudly on an all-null result, so
+this specific failure mode can't happen silently again.
+
+### 3. First real result (Dec 2025 Mullaghmore event): a genuine shortfall
+
+With the fetch fixed, the real December 18, 2025 Mullaghmore, Ireland
+event (widely reported as the biggest swell there in ~5 years) was
+confirmed present in the data — 10.6m/13.5s peak, correctly timed. But
+tracking it as one system did not hold up: at the plan's original period
+≥12s definition, the longest track held only 36h/1,814km (needed
+72h/2,000km), and a fine sweep of the period threshold gave a jagged,
+non-monotonic result (78h→42h→36h→24h→42h) — the plan's own named
+signature of a knife-edge rather than a robust pass. The one
 numerically-passing setting did so amid a chaotic field of ~25-30 other
-simultaneous short tracks.
+simultaneous short-lived tracks.
 
-**Round 2:** researched how operational wave forecasting actually does
-this. WAVEWATCH III partitions each grid point's spectrum into windsea + up
-to 5 separate swell systems *first* (Hanson & Phillips 2001), then runs
-dedicated spatial tracking on top — published work (arXiv:1812.06662)
-confirms a single collapsed "dominant value per point" isn't coherent
-enough to track alone. That validated trying Open-Meteo's secondary swell
-field. Also caught and corrected a false lead: finer time resolution
-looked like a big win (78h vs 36h) but was a measurement artifact from an
-under-scaled match-distance tolerance bridging unrelated blips — corrected,
-it actually got slightly worse (36h→18h→17h as resolution increased).
+### 4. Research: how does real forecasting actually do this?
 
-**Round 3 — the material change.** A re-fetch confirmed Open-Meteo does
-support `secondary_swell_wave_*` for this model. Using it (multi-component
-clustering instead of one dominant value per cell) alone brought the result
-to a smoother, more consistent pattern (4/16, no longer wildly jagged) —
-informative enough to keep digging rather than stop. That digging found two
-concrete bugs:
+Investigated how operational wave models (WAVEWATCH III etc.) handle
+exactly this problem. Finding: they don't track a single "dominant value
+per grid point" — they partition each point's full wave spectrum into
+windsea + up to 5 separate swell systems *first* (Hanson & Phillips 2001),
+then run dedicated spatial tracking on top, because — per published work
+(arXiv:1812.06662) — a single collapsed value per point isn't
+spatially/temporally coherent enough to track alone. That directly
+explained the instability found above and pointed at the fix: use
+Open-Meteo's secondary swell field instead of collapsing each cell to one
+"winning" component.
 
-1. **Tracker prediction bug.** Traced the actual huge, obviously-real
-   cluster underlying the Dec 18 event (79→195 cells, growing then
-   shrinking smoothly over 36+ hours) frame by frame. Clustering found it
-   correctly every single frame. The *tracker* lost it: at one frame, the
-   predicted position missed by 468km against a 450km match threshold,
-   because the physics-based prediction assumed the cluster moves in the
-   direction implied by the mean of every member cell's reported wave
-   direction — which, for a large reshaping region, isn't the same thing as
-   which way its centroid is actually drifting (observed: implied travel
-   direction ~94° east; actual centroid motion that frame: due south). One
-   bad prediction lost a 150+ cell cluster's identity outright. **Fixed:**
-   the tracker now predicts from the track's own last two observed
-   positions (standard practice in general object tracking) when
-   available, not purely a physical assumption about where it "should" go.
-2. **Land mask bug.** While tracing bug 1, found real open ocean west of
-   Scotland (58°N,-9°W and 58°N,-8°W — directly in the path of a swell
-   heading toward Ireland/Scotland) was wrongly masked as "land" by this
-   project's own crude, hand-rolled test mask. Fixed with a better (still
-   crude, still not for production) piecewise approximation. Checked
-   whether this caused the remaining shortfall — it didn't, for this
-   specific case (the real data shows the swell's measured period
-   genuinely drops below 13s as it nears shore, a real physical signal) —
-   but it was a real bug worth fixing regardless.
+Also tested and **ruled out** a promising-looking idea: does finer time
+resolution (1h vs 6h steps) help? First test showed a huge apparent win
+(78h vs 36h). It was a measurement artifact — the tracker's match-distance
+tolerance was still sized for 6h steps, loose enough at 1h steps to bridge
+unrelated nearby blips into a fake "continuous" track (net displacement
+3,386km vs. a claimed cumulative path of 8,146km, wandering off toward the
+grid's edge — nothing like the real event). Corrected for timestep, finer
+resolution actually got slightly *worse* (36h→18h→17h). This result later
+became a useful diagnostic signature (see Bug 3 below): a legitimate track
+has a net-displacement-to-cumulative-path ratio around 0.8; a bridged-blob
+artifact runs around 0.4.
 
-**Result after both fixes:** at the plan's own period≥12s definition, a
-track starting mid-Atlantic at hour 132 moves consistently northeast,
-passing almost exactly through the real event's time and place (hour 168 ≈
-Dec 18 00:00), and holds together for **66 continuous hours across
-3,263km** — a real, geographically-sensible, single-ID story arriving right
-when the actual event did. That's 6 hours short of the 72h bar,
-*consistently* across all 8 period=13 parameter combinations (66h or 60h,
-never wildly off) — not a knife-edge. Separately, a different, legitimate
-long-lived system clears the bar outright at 90h/3,611km under a looser
-(still swept) setting.
+### 5. Multi-component clustering + Bug 2 (tracker) + Bug 3 (land mask)
 
-**The actual decision now, per the plan's own "escalate, don't decide
-unilaterally" instruction:** this no longer reads as "the mechanic doesn't
-work." It reads as "the mechanic works, and there's a real but narrow gap
-between one specific parameter setting's result (66h) and a round-number
-bar (72h) that the plan chose without claiming it was physically exact,
-tested against exactly one real event." Is that close enough to proceed,
-worth one more real test event to see if 66h-vs-72h is typical or unlucky,
-or worth loosening the bar itself? That's not a code question — it's yours.
+Confirmed Open-Meteo supports `secondary_swell_wave_*` for this model.
+Switching clustering/tracking to treat swell, wind-sea, and secondary
+swell as independent, simultaneously-clusterable candidates per cell
+(instead of picking whichever has the highest energy) brought the result
+to a smoother, less jagged pattern — informative enough to keep digging
+rather than declare victory or defeat.
 
-## What's been built: `phase-1-validation/`
+That digging found two real, fixable bugs:
 
-A throwaway validation harness (script-based, not a notebook — same
-throwaway spirit) implementing the plan's §4.5 clustering/tracking
-algorithm and §8 Phase −1 test procedure end-to-end:
+- **Bug 2 — tracker position prediction.** Traced the actual huge cluster
+  underlying the Dec 18 event (79→118→137→159→180→195→164 cells across
+  36+ hours — obviously one coherent, evolving system) frame by frame.
+  Clustering found it correctly *every single frame*. The tracker lost it
+  anyway: at one frame, the predicted position missed the actual cluster
+  centroid by 468km against a 450km match threshold, because the
+  physics-based prediction assumed the cluster moves in the direction
+  implied by the energy-weighted mean of every member cell's reported wave
+  direction — which, for a large region reshaping as cells join one edge
+  and age out of another, is not the same thing as which way its centroid
+  is actually drifting (observed: implied travel ~94° east; actual
+  centroid motion that frame: due south). One bad prediction lost a
+  150+-cell cluster's identity outright.
+  **Fix:** the tracker now predicts from the track's own last two observed
+  positions (standard practice in general object tracking) whenever it has
+  them, falling back to the physics estimate only for a brand-new track
+  with no observed velocity yet. This is *not* the "naive nearest
+  centroid" the plan warns against — that would predict zero movement;
+  this uses the track's own recent motion instead of an external physical
+  assumption that turned out not to hold for large, reshaping clusters.
+- **Bug 3 — this project's own land mask.** While tracing Bug 2, found
+  real open ocean west of Scotland (58°N,-9°W and 58°N,-8°W — directly in
+  the path of a swell heading toward Ireland/Scotland) was wrongly masked
+  as "land" by `grid.py`'s original flat `lon ≥ -9 and lat ≤ 61` rule.
+  Fixed with a better piecewise approximation (still hand-rolled, still
+  not for production). Checked whether this caused the remaining
+  shortfall — it didn't for this specific case (the real data shows
+  measured period genuinely dropping below 13s as the swell nears shore, a
+  real physical/data signal) — but it was a real bug worth fixing anyway.
+  It mattered more later (see the global-scale section).
 
-- Region-growing clustering with direction/period tolerance + energy floor,
-  operating on multiple simultaneous wave components per cell (swell,
-  wind-sea, secondary swell) rather than one collapsed "dominant" value
-- Position-predicted tracking (not naive nearest-centroid, which the plan
-  explicitly warns breaks on the ~500km/6h jumps real groundswell makes) —
-  predicts from the track's own observed velocity once it has one, falling
-  back to a group-velocity/direction physical estimate for brand-new
-  tracks — with missed-frame tolerance and merge/split lineage
-- A 16-combination parameter sweep (period threshold, energy floor, angular
-  tolerance, min cluster size) — the plan requires sweeping, not hand-picking
-- GIF + centroid-path visualization for the required "blind read" test
-- A real-data fetcher, a temporal-smoothing preprocessor, and a diagnostic
-  script, all added along the way as bugs surfaced (see below)
+**Result after both fixes:** at the plan's original period≥12s
+definition, a single track starting mid-Atlantic moved consistently
+northeast, passing almost exactly through the real event's time and place
+(hour 168 ≈ Dec 18 00:00), and held together for **66 continuous hours
+across 3,263km** — 6 hours short of the 72h bar, but *consistently* so
+across all 8 period=13 parameter combinations (66h or 60h, never wildly
+off) — a real result, not a knife-edge.
 
-It first ran on synthetic data (proved the code logically correct, not the
-product assumption — see `phase-1-validation/README.md` for that history),
-then on real data once two unrelated bugs were found and fixed:
+### 6. Testing whether 66h-vs-72h was typical or unlucky: three more real events
 
-1. **This sandbox has no internet access.** Confirmed by direct test —
-   `open-meteo.com`, `noaa.gov`, `google.com` all reject with 403 (org
-   policy). A user fetched real data on their own Mac and handed the JSON
-   back via git instead.
-2. **The first real fetch came back 100% null** (every value, every cell,
-   both windows). Root cause: the fetcher passed `models=era5_ocean`, an
-   invalid model slug for this endpoint — the API returned HTTP 200 with
-   `hourly_units:"undefined"` and silently null-filled arrays, no error.
-   Fixed by dropping the `models` param entirely; the API auto-selects
-   forecast vs. archive data by date range on its own.
+Fetched three more independently documented events — different storms,
+different seasons, one different coast:
+- **Nov 9, 2023, Mullaghmore, Ireland** — Conor Maguire's widely-covered
+  "swell of the decade" session.
+- **Feb 24, 2024, Nazaré, Portugal** — Sebastian Steudtner's 28.57m
+  record-attempt wave.
+- **Jan 25-30, 2025, Nazaré, Portugal** — Storm Herminia, waves over 20m.
 
-Both are fixed and were not the cause of the current result — the second
-real fetch came back ~91% non-null and the December 2025 event is clearly
-present in it. The shortfall described above is a real clustering/tracking
-result, not a leftover data problem.
+**At the plan's literal period≥12s: 0 of 4 events passed.** Durations
+ranged 24h (Nov 2023, worst) to 66h (Dec 2025, best) — the original event
+was actually the *strongest* of the four at that threshold, not lucky.
 
-## Round 4, in progress: three more real events, to answer "is 66h typical or unlucky?"
+**At period_threshold=11, energy_floor=20: 3 of 4 events passed every
+single swept combination outright** (90-132h, 2,900-5,800km). **The 4th
+(Dec 2025) missed on only 2 of 4 combinations, and only on the distance
+criterion — 1,987km against the 2,000km bar, a 0.6% miss**, with duration
+(72h) exactly at the bar.
 
-User asked for three more real events to test, directly following from the
-question Round 3 raised. Three were researched and added to `WINDOWS` in
-`fetch_real_data.py` -- different storms, different seasons, one different
-target coast (Portugal instead of Ireland), across two winters:
+This reframed the question: the mechanism consistently found a real,
+coherent, multi-day, thousands-of-km trackable system in every event
+tested (4 for 4) — the limiting factor was the plan's specific 12-second
+cutoff, one second tighter than real North Atlantic events needed, not the
+algorithm.
 
-- `clean2_ireland_nov2023` (2023-11-02 to 2023-11-15): brackets Nov 9, 2023,
-  Conor Maguire's widely-covered "swell of the decade" session at
-  Mullaghmore -- same coast as the Round 1-3 event, different storm/year.
-- `clean3_nazare_feb2024` (2024-02-18 to 2024-03-02): brackets Feb 24, 2024,
-  the giant Nazaré swell where Sebastian Steudtner rode a wave measured at
-  28.57m. Different target coast (Portugal).
-- `clean4_nazare_jan2025` (2025-01-22 to 2025-02-04): brackets Jan 25-30,
-  2025, Storm Herminia, Nazaré, waves reported over 20m. Different storm,
-  same coast as the one above.
+### 7. Does this scale to real-time, whole-ocean tracking? (asked directly by the user)
 
-A new script, `test_event.py`, runs the 16-combination sweep against a
-single fetched event and evaluates it against the clean-window bar (72h+/
-2000km+) without needing a paired messy window -- sanity-checked against
-the already-known Dec 2025 result (reproduces 2/16, 66h/3,263km at
-period=13, exactly as before) before being used for anything new.
+Split into what's answerable without new data and what needed a real test:
 
-**Not yet fetched — this environment still has no internet access**, same
-as every previous round. Fetch on a machine with real internet access:
+- **Compute and cost:** fine. Clustering is near-linear in cell count
+  (global ~7,500 cells vs. ~450 tested is a 15x jump, still sub-second per
+  frame in unoptimized Python). Tracking's Hungarian assignment scales
+  with concurrent track count, not grid size. "Real time" in the plan's
+  own architecture (§4.3) already means a batch job every 3-6h, matching
+  how often the underlying wave models refresh anyway. Re-costed the API
+  budget with the now-9 variables (secondary swell included) at global
+  scale, 6-hourly refresh: **~463K calls/month, under half the $29/month
+  Standard plan's 1M cap.**
+- **Land masking:** replaced the hand-rolled North Atlantic boxes with the
+  `global-land-mask` PyPI package for global/regional testing — real
+  (Natural Earth-derived), vectorized, computes the whole global grid in
+  ~1ms, and correctly resolves the Bug 3 Scotland issue automatically with
+  no manual boxes. New: `global_grid.py`. `grid.py` itself is untouched;
+  the North Atlantic results stay reproducible on it exactly as before.
+- **Bug 4 — international date line wraparound, found and fixed.**
+  `grid.py`'s adjacency never needed to handle lon=180/-180 (the North
+  Atlantic box doesn't touch it) — it doesn't wrap, so a cell at lon=178
+  and one at lon=-178 (2 degrees apart on the real globe) were never
+  connected. Built a synthetic test (`test_dateline.py`) of a swell
+  crossing the seam: **without the fix it split into two separate track
+  IDs and lost 36h of continuity (180h with the fix vs. 144h/split into
+  two without it)**. Fixed in `global_grid.py`'s neighbor lookup (wraps
+  correctly) and in `clustering.py`'s cluster centroid longitude averaging
+  (a plain arithmetic mean of 179° and -179° gives 0°, not ±180° — switched
+  to a circular mean, the same fix already used for wave direction).
+  `clustering.py`/`sweep.py`/`visualize.py` gained an optional
+  `neighbor_fn` parameter so a different grid can be used without touching
+  the validated North Atlantic path (confirmed no regression).
+- **Pole-adjacent grid density — flagged, not fixed.** On a fixed-degree
+  grid, one longitude step is ~334km at the equator but only ~69km at
+  78°N/S. Tracking itself is latitude-independent (works in real km via
+  haversine throughout), but clustering granularity (what a "3-cell
+  cluster" physically represents) isn't consistent across latitudes. Not
+  fixed — would mean a reduced/variable-resolution grid, real scope creep
+  beyond what was asked — but worth knowing before tuning global
+  parameters.
+- **The real long-distance test: the July 2024 "7,000-mile swell."** A
+  storm off New Zealand's Chatham Islands generated a swell that hit
+  Tahiti (Code Red conditions at Teahupo'o), Hawaii, and California over
+  ~2 weeks, ~10,000km, crossing both the equator and the date line —
+  exactly the plan's own §4.6 "epic, rare, 10-day, 10,000km" scenario, for
+  real. Built `pacific_grid.py` (a ~1,200-cell New Zealand-to-California
+  region) and `test_pacific_event.py`, smoke-tested against a synthetic
+  version of the same geometry first (clean 114h/9,838km track crossing
+  both the seam and equator) before spending real fetch time on it.
 
-```bash
-cd phase-1-validation
-python3 fetch_real_data.py --window clean2_ireland_nov2023
-python3 fetch_real_data.py --window clean3_nazare_feb2024
-python3 fetch_real_data.py --window clean4_nazare_jan2025
-```
+  **Result: 16/16 parameter combinations passed, including the plan's
+  original, literal period≥12s threshold — no loosening needed.** The
+  winning track (222 continuous hours, min_cluster_size=5) starts at
+  45°S,176°W at hour 54 (matching the real storm's documented
+  location/timing near the Chatham Islands almost exactly), crosses the
+  equator around hour 210, and reaches 24°N,118°W by hour 276 — **9,756km
+  net displacement**, closely matching the real event's independently
+  reported **~10,000km** distance to California. Net-to-cumulative-path
+  ratio: 83% — in the healthy range (see the false-lead diagnostic from
+  step 4), not the ~40% ratio that flags a bridged-artifact track. The
+  date-line crossing itself is visible in the raw clustering: at hour 30,
+  two separate clusters straddled the seam (177°E and -178°W, ~230km
+  apart) during the storm's own chaotic generation phase, before
+  organizing into the one clean, forward-propagating 222h track from hour
+  54 onward — a physically sensible generation-vs-propagation distinction,
+  not a tracking failure.
 
-Each writes its own `raw_<window>.json` (the `--window` name is used as the
-output filename stem automatically). Hand all three back (gitignored, so
-`git add -f raw_clean2_ireland_nov2023.json raw_clean3_nazare_feb2024.json
-raw_clean4_nazare_jan2025.json` or send directly), then test each one:
+### 8. The decision: threshold revised from 12s to 11s
 
-```bash
-python3 test_event.py raw_clean2_ireland_nov2023.json
-python3 test_event.py raw_clean3_nazare_feb2024.json
-python3 test_event.py raw_clean4_nazare_jan2025.json
-```
+Put to the user directly rather than decided unilaterally, per the plan's
+own §8 instruction (*"Escalate this decision rather than deciding it
+unilaterally"*) and its explicit anti-p-hacking design (*"write these down
+before looking at results"* — moving the pass bar quietly after seeing a
+result fail would defeat the point of a falsifiable test). The user's
+call: loosen it. Reasoning, laid out before the decision: the four North
+Atlantic near-misses were consistently about event strength, not a wrong
+threshold in general — a genuinely powerful long-distance system (the
+Pacific event) passed at the plan's original number with large margins,
+while weaker North Atlantic storms needed the one-second loosening.
 
-Each prints its own 16-row pass table and writes `output_<name>/` with a
-GIF and centroid-path plot, same format as the original Dec 2025 test.
+**Documented in `MASTER_BUILD_PLAN.md`:** §4.4 (the `category` field
+definition), §11 (decision log, row 16), §12.2 (full evidence summary and
+the decision itself, which also marks Phase −1 passed and clears Phase 0
+to proceed).
 
-## Round 4 result — all three fetched and tested. This is the clearest finding yet.
+### 9. Sanity check: would loosening further (to 10 or 9) help more?
 
-```
-event                        n_pass/16   p=11,floor=20 (4 combos)      p=13 range (h)
-Dec 2025 (Mullaghmore)        2/16       90h,90h,72h,72h  (2/4 miss on distance, 1987km vs 2000km bar -- a 0.6% miss)
-Nov 2023 (Mullaghmore)        5/16       96h,90h,90h,90h  (4/4 pass)
-Feb 2024 (Nazaré)             8/16       132h,120h,132h,120h (4/4 pass)
-Jan 2025 (Nazaré)             8/16       114h,72h,120h,72h (4/4 pass)
-```
+Tested directly against all 6 real datasets before considering it, since
+they were already on hand. Two things happen, and they cut in opposite
+directions:
 
-**At the plan's own period≥12s definition (tested via period_threshold=13,
-the closest swept value): 0 of 4 real events pass.** Durations range 24h
-(Nov 2023, worst case) to 66h (Dec 2025, best case) — always short, by a
-real and varying margin, never close to a coincidence.
+- **On the clean side, duration keeps inflating as the threshold drops** —
+  e.g. Dec 2025 goes 66h (≥13) → 90h (≥11) → 192h (≥10) → 324h (≥9). Looks
+  like an improvement. It isn't: the 324h "track" at ≥9 has a
+  net-displacement-to-cumulative-path ratio of 0.38 (the false-lead
+  signature from step 4) and wanders inside a fixed 22-45°N box for two
+  weeks rather than going anywhere — an artifact, not a real story.
+- **On the messy side (the decisive check):** at threshold ≥11 (current),
+  the quiet window shows at most 1 simultaneous cluster, appearing in only
+  6/56 frames — genuinely quiet. At **≥10**, max simultaneous jumps to 4
+  (still technically under the plan's ≤5 ceiling) but something shows up
+  in 38/56 frames (68% of the time) — a real, meaningful degradation in
+  "quiet periods actually look quiet." At **≥9**, max simultaneous hits
+  **7 — breaking the plan's own ≤5 ceiling outright**, with activity in
+  every single frame of the supposedly unremarkable window.
 
-**At period_threshold=11 (one second below the plan's definition), energy_floor=20:
-3 of 4 events pass all four angular-tolerance/min-cluster-size combinations
-outright** (90-132h, comfortably clearing 72h, several with 3,000-5,800km).
-**The 4th (Dec 2025) misses on only 2 of 4 combinations, and only on the
-distance criterion — 1,987km against the 2,000km bar, a 0.6% miss** with
-duration (72h) exactly at the bar.
+**Conclusion: 11 is the right number, not a stopping point chosen
+arbitrarily.** Loosening further trades away the "distinguish a real story
+from noise" property that is the actual point of the two-window Phase −1
+test, in exchange for duration numbers that are inflating for the wrong
+reason. No code or threshold changes made as a result of this check — it
+confirmed the existing decision rather than changing it.
 
-**This directly answers Round 3's open question, and reframes it.** The
-66h/3,263km Dec 2025 result wasn't unlucky — if anything it was the
-*strongest* of the four events at the strict period≥12 threshold (60-66h vs
-24-60h for Nov 2023, ~42h for both Nazaré events). What's actually
-happening: **the clustering/tracking mechanism is sound and consistently
-finds a real, coherent, multi-day, thousands-of-km trackable system in
-every single real event tested (4 for 4) — the plan's specific "period ≥12s"
-cutoff for what counts as a trackable groundswell is the actual limiting
-factor, not the algorithm.** A one-second adjustment to that threshold (11s
-instead of 12s, still very much "long-period groundswell" physically, not
-a stretch to call it that) turns "0/4 events pass" into "essentially 4/4
-events pass," with the exact code already in this repo — no further
-tracking or clustering changes needed to test this claim.
+---
 
-**This is a real decision, not a coding task:** is loosening the
-groundswell definition from 12s to 11s (or wherever the real cutoff turns
-out to be after a touch more testing) an acceptable adjustment to make, or
-does the plan's 12s threshold reflect a hard product/narrative requirement
-("groundswell" specifically, not "long-period swell generally") that
-shouldn't move? That's yours to weigh, not something to decide unilaterally
--- but the evidence now points at a specific, small, well-targeted fix
-rather than "the mechanic doesn't work" or "needs a fundamentally different
-approach."
+## What's next
 
-## Round 5, also in progress: does this scale to real-time, whole-ocean tracking?
+**Phase 0** (`MASTER_BUILD_PLAN.md` §8): the visual-only prototype. No
+live data, no backend. Hard-code one fake swell path ("Helena") crossing
+the North Atlantic as local TypeScript data; full cinematic globe per §3;
+time scrubber moving the hard-coded path only; **Follow** persisted
+locally (AsyncStorage); decide the Open-Meteo attribution treatment (§3.3)
+here. Judged by a falsifiable test, not vibes: hand the phone to five
+people who don't surf, say nothing, and time whether they rotate the globe
+unprompted for 30+ seconds. This is independent of everything above — it
+doesn't consume the validation harness or the fetched data at all.
 
-User asked whether the mechanism works at the scale of scanning all oceans
-in real time, not just one basin. Split into what's a compute/cost question
-(answered without new data) and what's a genuine data-and-topology question
-(needs a real test):
-
-**Compute and cost -- fine, worked out from what's already known.**
-Clustering is near-linear in cell count (global ~7,500 cells vs. the ~450
-tested is a 15x jump, still sub-second per frame). Tracking's Hungarian
-assignment scales with concurrent track count, not grid size -- trivial
-even at 50-100 simultaneous global systems. "Real time" in the plan's own
-architecture (§4.3) already means a batch job every 3-6h, matching how
-often the underlying wave models refresh anyway, not literal streaming.
-Re-costed the API budget with the now-9 variables (secondary swell added in
-Round 3) at global scale, 6-hourly refresh: ~463K calls/month, still under
-half the $29/month Standard plan's 1M cap.
-
-**What was actually untested, and what's been done about it:**
-
-1. **Land masking.** The hand-rolled North Atlantic box (`grid.py`) took
-   real bug-hunting to get right for one basin (see Round 3) and was never
-   going to generalize. Replaced, for global/regional testing, with the
-   `global-land-mask` PyPI package -- real (Natural Earth-derived),
-   vectorized, computes the whole global grid in ~1ms, and correctly
-   resolves the exact west-of-Scotland bug found by hand in Round 3
-   without any manual boxes. New file: `global_grid.py`. `grid.py` itself
-   is untouched -- the already-validated North Atlantic results stay
-   reproducible on it exactly as before.
-2. **International date line wraparound -- a real bug, found and fixed.**
-   `grid.py`'s adjacency never needed to handle lon=180/-180 (the North
-   Atlantic box doesn't touch it). It doesn't wrap: a cell at lon=178 and
-   one at lon=-178 are neighbors on the real globe (2 degrees apart) but
-   were never connected. Confirmed this actually breaks tracking with a
-   synthetic test (`test_dateline.py`): a swell crossing the seam split
-   into two separate track IDs and lost 36h of continuity (180h with the
-   fix vs. 144h/split-into-two without it). Fixed in `global_grid.py`'s
-   neighbor lookup (wraps correctly) and in `clustering.py`'s cluster
-   centroid longitude averaging (a plain arithmetic mean of 179 and -179
-   gives 0, not ±180 -- switched to a circular mean, the same fix
-   already used for wave direction). `clustering.py`/`sweep.py`/
-   `visualize.py` also got a `neighbor_fn` parameter so a different grid
-   can be plugged in without touching the validated North Atlantic path
-   (confirmed no regression: North Atlantic real-data result unchanged,
-   2/16, same durations, only floating-point-level centroid differences
-   from the more correct longitude averaging).
-3. **Pole-adjacent grid density -- flagged, not fixed.** On a fixed-degree
-   grid, one longitude step is ~334km at the equator but only ~69km at
-   78°N/S. Tracking itself is latitude-independent (works in real km via
-   haversine throughout), but clustering granularity (what a "3-cell
-   cluster" physically represents) isn't consistent across latitudes.
-   Not fixed -- would mean a reduced/variable-resolution grid, real scope
-   creep beyond what was asked. Worth knowing before someone tunes global
-   parameters.
-4. **The big one: does tracking hold together over a REAL long-distance,
-   cross-hemisphere, date-line-crossing event, not just a synthetic one?**
-   Set up a test for the "7,000-mile swell" of July 2024 -- a real, widely
-   covered event (Surfline "7,000-Mile Swell Kicks Off July"): a storm off
-   New Zealand's Chatham Islands on Jul 8, 2024 generated 20s-period
-   groundswell that hit Tahiti Jul 10-11 (Code Red conditions at
-   Teahupo'o), Hawaii the following week, then California -- ~10,000km,
-   crossing both the equator and the date line, over ~2 weeks. New files:
-   `pacific_grid.py` (a ~1,200-cell region spanning New Zealand to
-   California, using the real land mask + date-line-aware adjacency) and
-   `test_pacific_event.py`. Smoke-tested the whole pipeline (fetch ->
-   cluster -> track -> plot) against a synthetic version of this exact
-   geometry first -- got a single continuous 114h/9,838km track crossing
-   both the seam and the equator cleanly -- before trusting it enough to
-   ask for real data.
-
-**Not yet fetched -- same reason as every other round, no internet here,
-and this one is bigger** (~1,200 cells vs. ~400, so noticeably slower):
-
-```bash
-cd phase-1-validation
-python3 -m pip install global-land-mask   # new dependency, needed for --grid pacific
-python3 fetch_real_data.py --window pacific_2024 --grid pacific
-```
-
-Hand back `raw_pacific_2024.json` (gitignored, `git add -f` it or send
-directly), then:
-
-```bash
-python3 test_pacific_event.py raw_pacific_2024.json
-```
-
-Prints the same 16-row pass table as the other event tests, plus a
-centroid-path plot worth looking at directly for whether the track
-visually crosses the date line (around lon 180 in the plot, which uses a
-shifted 0-360 longitude convention so the region doesn't render split
-across both edges) and the equator (lat 0) in one continuous piece, the
-way the synthetic smoke test did.
-
-## Round 5 result — fetched and tested. The strongest result of the whole investigation.
-
-**16/16 parameter combinations pass.** At the plan's own strict period≥12s
-definition (period_threshold=13 in the sweep), results are dramatically
-larger than anything seen in the North Atlantic: 84h-222h, 4,243-11,799km,
-depending on the exact setting.
-
-The single longest track (222h continuous, min_cluster_size=5,
-energy_floor=20, angular_tolerance=30) is worth describing directly rather
-than just citing the number: it starts at 45°S, 176°W at hour 54 of the
-window (~July 8, matching the real storm's documented timing and location
-near the Chatham Islands almost exactly), moves in a smooth, physically
-sensible curve north and slightly east through the entire South Pacific,
-**crosses the equator around hour 210** (~July 16-17), and continues to
-**24°N, 118°W by hour 276** (~July 19) -- **9,756km net displacement**,
-extremely close to the real event's independently reported "~10,000km" to
-the Californian coast. Net displacement (9,756km) tracks cumulative path
-(11,799km) at a healthy 83% ratio, the same range as the legitimate (not
-the false-lead) North Atlantic tracks -- not the ~40% ratio that flagged
-the earlier false lead in Round 2.
-
-The international date line crossing itself shows up clearly in the raw
-per-frame clustering just before this track's continuous phase begins: at
-hour 30, two separate clusters were detected straddling the seam (one at
-177°E, one at -178°W, ~230km apart) -- the storm's own generation-phase
-wave field, genuinely chaotic as a storm intensifies, before a single,
-clean, forward-propagating groundswell organizes into the one 222h track
-from hour 54 onward. That's a physically sensible distinction (storm
-generation vs. propagating swell), not a tracking failure.
-
-**What this changes:** this is a direct, real-world test of the exact
-"epic, rare, 10-day/10,000km" scenario the master plan's own §4.6
-describes, and it passes convincingly, at the plan's own strict threshold,
-with no parameter loosening needed. Combined with Round 4's finding (the
-North Atlantic events needed the threshold loosened from 12s to 11s to pass
-consistently), the emerging picture is that **the mechanism handles
-genuinely powerful, long-distance groundswell very well at the plan's own
-definition** -- the Round 4 near-misses look more like they were weaker,
-shorter-lived North Atlantic events relative to this dramatically more
-powerful Southern Ocean-to-Pacific case, not a sign the threshold itself is
-wrong in general. That's a meaningfully different, more optimistic
-framing than Round 4 alone suggested, and worth weighing alongside it
-before deciding whether to adjust the 12s definition at all.
-
-Files: `output_pacific_2024/sweep_results.json`,
-`output_pacific_2024/event_centroid_paths.png` (the default loose-threshold
-view, busy -- real July Pacific storm season has a lot of concurrent
-activity across ~1,200 cells, expected), `output_pacific_2024/
-hero_centroid_paths.png` (the specific period=13 winning track in
-isolation -- the clean, single-story visual).
-
-## Other open items from the master plan discussion (lower priority than Phase −1)
-
-These came up during planning but are **not blocking** — do not act on them
-before the Phase −1 escalation above is resolved:
-
-- **Open-Meteo call-volume budget**: a rough estimate (done via search,
-  not verified against the primary pricing page — this environment's
-  network block prevented fetching it directly) suggested the $29/month
-  Standard plan (1M calls/month) is plausible at 6-hourly refresh with
-  6-8 variables, but tight-to-over-budget at 3-hourly refresh or 12+
-  variables. Re-verify against Open-Meteo's actual pricing page once
-  network access exists, and decide the refresh cadence explicitly rather
-  than defaulting to the more expensive option.
-- **Brand name** (§12.1): still deferred, correctly. Nothing here changes
-  that.
+**Lower-priority open items**, not blocking, listed in
+`MASTER_BUILD_PLAN.md` §12:
+- **Open-Meteo call-volume budget** (§4.1): the ~463K calls/month estimate
+  above is derived from a search-summarized pricing formula, not verified
+  directly against Open-Meteo's pricing page (still blocked from this
+  sandbox). Worth a direct check once real network access exists, before
+  Phase 5 (the first paid feature) ships.
+- **Brand name** (§12.1): still deferred, correctly — nothing here
+  changes that.
 - **Print fulfillment partner** (§12.3): still unselected, correctly, this
   far out.
 
-## File map
+**Loose threads from the validation work itself**, worth knowing about but
+not blocking Phase 0:
+- The messy window (Sep 8-21, 2025) was picked as a generic shoulder-season
+  fortnight and was never independently cross-checked against the raw
+  significant wave height the way the plan itself recommends — it happens
+  to test clean (near-zero clusters at threshold 11-13), but that was
+  confirmed after the fact, not verified up front.
+- Only one messy window has been tested, vs. five clean/eventful windows.
+  A second messy window would strengthen confidence in the ≤5 ceiling
+  holding generally, not just for this one quiet fortnight.
+- Merge/split lineage (`parent_id`/`merged_into` in `tracking.py`) is
+  implemented and exercised by the synthetic tests, but hasn't been
+  specifically stress-tested against a real event with a documented
+  merge or split.
+- Pole-adjacent grid density (§8 above) is flagged but not addressed —
+  irrelevant for the North Atlantic v1 scope, relevant if/when the global
+  grid is used for anything beyond validation testing.
 
+---
+
+## Quick reference: how to reproduce or extend this
+
+Run any of the following from `phase-1-validation/` (all inputs are
+already fetched and in the repo):
+
+```bash
+python3 sweep.py                                             # synthetic-data sweep
+python3 run_validation.py --real raw_clean.json raw_messy.json   # Dec 2025 North Atlantic
+python3 test_event.py raw_clean2_ireland_nov2023.json            # any single North Atlantic event
+python3 test_event.py raw_clean3_nazare_feb2024.json
+python3 test_event.py raw_clean4_nazare_jan2025.json
+python3 test_pacific_event.py raw_pacific_2024.json               # the Pacific crossing
+python3 test_dateline.py                                          # synthetic date-line check
 ```
-phase-1-validation/
-  README.md              full technical status and the actual evidence -- read this in full
-  physics.py              haversine, bearing, great-circle interpolation, Cg=1.56T
-  grid.py                 N. Atlantic ocean grid + crude land mask (synthetic-test only,
-                           NOT for production -- see file header)
-  synthetic.py             synthetic clean/messy swell field generator (code-logic validation)
-  clustering.py            §4.5 region-growing clustering; accepts neighbor_fn to use a different grid (Round 5)
-  tracking.py              §4.5 tracking + lineage; predicts from observed velocity when available (Round 3 fix)
-  sweep.py                 16-combination parameter sweep + pass-criteria checks
-  visualize.py             GIF + centroid-path plots; accepts neighbor_fn/all_cells/lon_transform (Round 5)
-  smoothing.py             temporal smoothing preprocessing -- tried, didn't help, kept for the record
-  fetch_real_data.py       real-data fetcher (run OUTSIDE this sandbox); probes for secondary swell; --grid pacific
-  real_data.py             converts fetched real data into the pipeline's frame format; multi-component per cell
-  diagnose_api.sh          isolates Open-Meteo request-parameter issues
-  run_validation.py        CLI entry point -- synthetic (default) or --real, optional --smooth
-  test_event.py            tests one real North-Atlantic-grid event alone (Round 4)
-  global_grid.py           real global ocean grid (global-land-mask package) + date-line-aware adjacency (Round 5)
-  pacific_grid.py          NZ-to-California test region, real mask + date-line adjacency (Round 5)
-  test_dateline.py         synthetic date-line-crossing test -- found + verified the wraparound bug (Round 5)
-  test_pacific_event.py    tests the real July 2024 "7,000-mile swell" event (Round 5, not yet fetched)
-  output/                  current artifacts -- Round 3 North Atlantic REAL DATA result (2/16, near-pass, see above)
-  output_pacific_2024/     Pacific event results once fetched and tested (Round 5, doesn't exist yet)
-  raw_clean.json           real fetched data, Dec 11-24 2025, incl. secondary swell (gitignored, local after fetch)
-  raw_messy.json           real fetched data, Sep 8-21 2025, incl. secondary swell (gitignored, local after fetch)
+
+To fetch a *new* event: add a `(start_date, end_date)` entry to `WINDOWS`
+in `fetch_real_data.py`, then, **on a machine with real internet access**
+(this sandbox has none):
+
+```bash
+python3 fetch_real_data.py --window <name>                    # North Atlantic grid
+python3 fetch_real_data.py --window <name> --grid pacific      # Pacific-scale region (slower, ~1,200 cells)
 ```
+
+Hand the resulting `raw_<name>.json` back (`git add -f` it, since these
+files are `.gitignore`d by pattern but are the actual evidence) and test it
+with `test_event.py` or `test_pacific_event.py` depending on which grid was
+used.
