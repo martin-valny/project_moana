@@ -1,7 +1,7 @@
 # Project Moana — Progress Report
 
 Last updated: 2026-08-18, branch `claude/moana-master-build-plan-v2-zjs07y`,
-HEAD `3b730d7`. Working tree clean, everything below is pushed.
+HEAD `8723a9e`. Working tree clean, everything below is pushed.
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -16,37 +16,41 @@ product vision and rules; this file is the build/validation log against it.
 ## Status, one line
 
 **Phase −1 is passed (decided 2026-08-17). Phase 0's visual prototype
-(`phase-0-prototype/`) has had ten rounds of iteration — user feedback
+(`phase-0-prototype/`) has had eleven rounds of iteration — user feedback
 against a reference image, an external critique evaluated on its merits,
 real Earth textures, measuring the reference instead of describing it, real
 multi-source swell physics (round 9, which also found that **the ocean
 shader had never actually animated over time in this project's history**,
 a React Three Fiber uniforms-update bug present since round 2), lateral
-inhibition and a strength-coded colour ramp (round 10) — and an eleventh
-(§"Round 11" below) that restyled Helena's own path/marker off a hard
-opaque white line and dot (which the user disliked as a separate
-line-chart overlay) onto the same soft-gradient, no-hard-edges language and
-the same swell-strength colour ramp as the ocean field itself. It is
-functionally complete and automatically verified, but has not been shown to
-the user since round 11 landed, and still needs the plan's actual
-falsifiable gate — five non-surfers timed on a physical phone — which no
-agent session can run itself.**
+inhibition and a strength-coded colour ramp (round 10), restyling Helena's
+path/marker off a hard white line and dot (round 11) — and a twelfth
+(§"Round 12" below) that made the timeline's existing past-through-future
+drag range actually discoverable, gated each source's energy so it fades
+in at its own spawn moment instead of showing a residual dot beforehand,
+and gave each swell a trailing "wake" (bright leading edge, receding
+toward its origin) so a single static frame hints at motion without
+requiring the timeline to be scrubbed at all. It is functionally complete
+and automatically verified, but has not been shown to the user since round
+12 landed, and still needs the plan's actual falsifiable gate — five
+non-surfers timed on a physical phone — which no agent session can run
+itself.**
 
 **If you're picking this up cold, read in this order:** (1) this "Status"
 section, (2) "What's next" near the bottom for the immediate action, (3)
-"Round 11" under "Phase 0" for the most recent thread (restyling Helena's
-path/marker, and an additive-blending flare bug found along the way), (4)
-"Round 10" for lateral inhibition, pole-zone spirals only visible from a
-rotated camera, and why the first purple colour picked silently failed to
-render as purple, (5) "Round 9" for the swell-physics rework and its
-central lesson (verify uniform updates actually reach the GPU by checking
-object identity, not by reading back the JS value you just set — the two
-can silently diverge), (6) "Round 8" for
-how "measure the reference, don't describe it" found a large framing error,
-(7) "Round 7" for the real-texture rework, (8) "Round 6" for how to
-evaluate an external critique without trusting or dismissing it blindly,
-(9) skim "What was built" and rounds 2–5 for context on how the visual
-engine got here. Don't start a "round 12" of self-directed visual tuning
+"Round 12" under "Phase 0" for the most recent thread (bidirectional
+timeline, source spawn-in, the trailing-wake legibility device), (4)
+"Round 11" for restyling Helena's path/marker, and an additive-blending
+flare bug found along the way, (5) "Round 10" for lateral inhibition,
+pole-zone spirals only visible from a rotated camera, and why the first
+purple colour picked silently failed to render as purple, (6) "Round 9"
+for the swell-physics rework and its central lesson (verify uniform
+updates actually reach the GPU by checking object identity, not by reading
+back the JS value you just set — the two can silently diverge), (7)
+"Round 8" for how "measure the reference, don't describe it" found a large
+framing error, (8) "Round 7" for the real-texture rework, (9) "Round 6"
+for how to evaluate an external critique without trusting or dismissing it
+blindly, (10) skim "What was built" and rounds 2–5 for context on how the
+visual engine got here. Don't start a "round 13" of self-directed visual tuning
 purely on your own initiative — get a fresh look from the user first.
 
 ---
@@ -968,7 +972,76 @@ open-panel view all show a soft glowing gradient stroke fading into the
 water at both ends, a diffuse marker glow with no hard edge, and no flare
 at the path's tip.
 
-### Verified, and how (current as of round 11, HEAD `3b730d7`)
+### Round 12: a bidirectional timeline, sources that spawn in, and a trailing wake
+
+The user's own framing, after seeing round 11: "the ocean should be
+moving - showing some past periods as well as prediction." Brainstormed
+two complementary directions with them before building anything — a
+manual scrubber that reaches into real history, versus baking recency
+into the field's own rendering so a single static frame reads as alive
+without requiring interaction — and built both, since they answer
+different needs (one lets a user deliberately go dig into history, the
+other is what makes the *default* view feel like something in motion).
+
+**The scrubber already went both ways; nothing on screen said so.**
+`Timeline`'s drag range has always been `HELENA_MIN_OFFSET_HOURS` (−18) to
+`HELENA_MAX_OFFSET_HOURS` (96) — the full span of Helena's own hardcoded
+path data — but every labelled stop sat at "Now" or later ("Now",
+"Tomorrow", "3 Days"). A user could already drag left of "Now" into real
+history; nothing hinted they could. Added a labelled stop at the range's
+actual past extreme, tied to the real constant
+(`` `-${Math.abs(HELENA_MIN_OFFSET_HOURS)}h` ``) so it can't drift out of
+range if Helena's path data ever changes. First attempt used the fuller
+label "18h Ago", which visibly collided with "Now"'s label — only 18 of
+the track's 114 total hours separate them, not enough room for two
+multi-word labels that close together. Shortened to "-18h" and confirmed
+in a fresh screenshot that the collision was gone.
+
+**Sources now fade in at their own spawn moment instead of always showing
+something.** `angularFrontDistanceRad` already clamped a source's front to
+a 0 radius before its `spawnOffsetHours` (so scrubbing before a source
+existed was already safe, not broken) — but its *energy* was never gated
+the same way, and the shader's own `arrived` test (`smoothstep` around a
+front of exactly 0) evaluates to 0.5 exactly at a source's origin
+regardless, so every source rendered as a small fixed dot at its origin
+even scrubbed to well before it had actually started generating. New
+`spawnRamp01(spawnOffsetHours, forecastHours)` in `swellSources.ts` fades
+a source's energy in linearly over its first 4 hours, multiplied into the
+same `energyArray` the shader already reads — scrubbing to before a
+source's spawn time now shows genuinely nothing there, not a residual
+mark.
+
+**Each swell now reads as a wake, not a flat plateau.** Previously
+`arrived` was a flat 1 for the entire region a front had already passed,
+falling to 0 only right at the leading edge — physically defensible (these
+are ongoing storms, still generating, not a single pulse) but meant a
+single static frame carried no cue that water near a source's origin is
+*older* than water at its growing edge; nothing looked like it was
+mid-motion without actually scrubbing the timeline. Split into
+`leadingEdge` (the original crisp cutoff — kept exactly as-is, since "the
+swell hasn't reached here yet" is real information that should stay sharp)
+and a new `trailFade`, which dims the long-passed part of the wake back
+toward the origin (floor at 30%, never fully gone — it's still there,
+just older), ramping to full brightness by roughly 75% of the way out to
+the front. Purely a legibility device, same spirit as round 11's fade on
+Helena's own path, not a change to the underlying physics. Verified by
+hand-tracing the formula (`trailFade` is 0 exactly at the origin, 1 by
+75% of the front's radius, independent of the separate distance-`falloff`
+term that dims for an unrelated geometric-spreading reason) rather than
+trusting a screenshot — a first attempt at reading this back from a
+rendered pixel sample was contaminated by the current-position marker's
+own glow sitting at the sample point, a reminder that visual sampling
+needs a sample point actually clear of other rendered elements.
+
+**Verified:** `npm run build` and `npm run lint` clean. `smoke-test.mjs`
+(both viewports), `panel-glass-test.mjs`, and `rotate-test.mjs` all pass
+with zero console errors. Visual: screenshots at "-18h", "Now", "Tomorrow"
+and "3 Days" show clear, monotonic growth of every source's front across
+the full range, the new stop's label legible with no collision, and a
+mostly-calm ocean at "-18h" where only the earliest-spawning invented
+sources have anything to show yet.
+
+### Verified, and how (current as of round 12, HEAD `8723a9e`)
 
 No physical phone or human testers were available in this session, so
 verification stopped at what automation can actually confirm. Four scripts

@@ -5,7 +5,7 @@ fake swell ("Helena") crossing the North Atlantic, rendered on a cinematic
 dark globe, with a draggable timeline, tap-to-select, and local-only
 Follow.
 
-The visual engine (the globe surface itself) is on its eleventh iteration.
+The visual engine (the globe surface itself) is on its twelfth iteration.
 Round 1 used a GPU particle field. Round 2 replaced it with a domain-warped
 fractal-noise shader. Round 3 fixed missing curvature shading, a dead bloom
 pipeline, and several CSS bugs. Round 4 was the first pass with the actual
@@ -35,7 +35,13 @@ light-blue-to-purple colour ramp. Round 11 (current) restyled Helena's own
 path and current-position marker — untouched by rounds 7–10's work on the
 ocean shader itself, and still a hard opaque white line and dot predating
 the swell-strength colour language — onto the same soft-gradient palette
-and no-hard-edges look. See "Round 7" through "Round 11" below.
+and no-hard-edges look. Round 12 (current) made the timeline's existing
+past-through-future drag range actually discoverable, gated each source's
+energy so it fades in at its own spawn moment instead of showing a
+residual dot beforehand, and gave each swell a trailing wake (bright
+leading edge, receding toward its origin) so a single static frame hints
+at motion without the timeline needing to be scrubbed at all. See "Round
+7" through "Round 12" below.
 
 ## Run it
 
@@ -901,6 +907,53 @@ Fresh screenshots at the default angle, both rotate angles, and the
 open-panel view show a soft glowing gradient stroke fading into the water
 at both ends, a diffuse marker glow with no hard edge, and no flare at the
 path's tip.
+
+## Round 12: a bidirectional timeline, sources that spawn in, and a trailing wake
+
+The user's own framing after round 11: "the ocean should be moving -
+showing some past periods as well as prediction." Brainstormed two
+complementary directions with them first — a manual scrubber reaching into
+real history, versus baking recency into the field's own rendering so a
+static frame reads as alive without interaction — and built both, since
+they answer different needs.
+
+**The scrubber already went both ways; nothing said so.** `Timeline`'s
+drag range has always spanned `HELENA_MIN_OFFSET_HOURS` (−18) to
+`HELENA_MAX_OFFSET_HOURS` (96), but every labelled stop sat at "Now" or
+later. Added a labelled stop at the range's actual past extreme, tied to
+the real constant so it can't drift out of range. First label ("18h Ago")
+visibly collided with "Now" — only 18 of the track's 114 total hours
+separate them; shortened to "-18h" and confirmed the collision was gone.
+
+**Sources now fade in at their own spawn moment.**
+`angularFrontDistanceRad` already clamped a source's front to 0 before its
+spawn time, but energy was never gated the same way, and the shader's own
+`arrived` test evaluates to 0.5 exactly at a source's origin regardless —
+every source showed a small fixed dot at its origin even scrubbed to
+before it had actually started. New `spawnRamp01()` fades a source's
+energy in linearly over its first 4 hours; scrubbing to before spawn now
+shows genuinely nothing.
+
+**Each swell now reads as a wake, not a flat plateau.** Previously
+`arrived` was flat behind the leading edge, falling only right at the
+edge itself — physically defensible (ongoing storms, not a single pulse)
+but meant a static frame carried no cue that water near an origin is
+*older* than water at the growing edge. Split into `leadingEdge` (the
+original crisp cutoff, kept exactly as-is) and a new `trailFade`, dimming
+the long-passed part of the wake toward the origin (floor at 30%, never
+fully gone), ramping to full brightness by ~75% of the way to the front.
+A legibility device, not a physics change. Verified by hand-tracing the
+formula rather than trusting a screenshot — a first attempt at reading it
+back from a rendered pixel sample was contaminated by the marker's own
+glow sitting right at the sample point.
+
+**Verified:** `npm run build`/`npm run lint` clean; `smoke-test.mjs` (both
+viewports), `panel-glass-test.mjs`, `rotate-test.mjs` all pass, zero
+console errors. Screenshots at "-18h", "Now", "Tomorrow", and "3 Days"
+show clear, monotonic growth of every source's front across the full
+range, the new stop's label legible with no collision, and a mostly-calm
+ocean at "-18h" where only the earliest-spawning sources have anything to
+show yet.
 
 ## Build bugs worth knowing about (fixed, but instructive)
 
