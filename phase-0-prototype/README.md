@@ -5,13 +5,14 @@ fake swell ("Helena") crossing the North Atlantic, rendered on a cinematic
 dark globe, with a draggable timeline, tap-to-select, and local-only
 Follow.
 
-The visual engine (the globe surface itself) is on its fourth iteration.
+The visual engine (the globe surface itself) is on its fifth iteration.
 Round 1 used a GPU particle field. Round 2 replaced it with a domain-warped
 fractal-noise shader. Round 3 fixed missing curvature shading, a dead bloom
-pipeline, and several CSS bugs. Round 4 (current) is the first pass with the
-actual reference image in hand rather than a written description of it — see
-"Round 4: working from the reference" below, which is also where the three
-real bugs that pass uncovered are written up.
+pipeline, and several CSS bugs. Round 4 was the first pass with the actual
+reference image in hand and fixed structural issues (anisotropic ribbons,
+framing, a real land-mask bug). Round 5 (current) replaced the shading model
+itself — the globe had curvature but no actual light, which read as "obvious"
+shading rather than a lit 3D object. See "Round 5" below.
 
 ## Run it
 
@@ -312,6 +313,72 @@ structural rather than a matter of tuning:
 - Tuning was done against the reference image by eye. It is a painted/AI
   mockup, so exact ribbon shapes are not reproducible; the target was
   matching character — elongation, scale, softness, luminosity, framing.
+
+## Round 5: the shading model itself was the problem
+
+After round 4 landed, the user looked at it again: *"the shading around
+globe is too obvious, it doesn't look 3d, flowy."* The globe *did* have
+curvature shading by then (round 3/4's per-fragment view-direction limb
+darkening + atmosphere rim) — so why did it still look flat?
+
+**Because none of that shading was directional.** Both the limb-darkening
+term and the atmosphere rim were functions of `dot(normal, viewDirection)`
+only — rotationally symmetric around the camera axis, brightest dead-centre,
+darkening/glowing *uniformly* toward every point on the silhouette. That is
+a radial vignette, not sphere lighting. The actual perceptual cue for "this
+is a lit 3D object" is a *directional* light — one side brighter, the other
+darker, with a soft gradient between them. A camera-relative, rotationally
+symmetric falloff has no direction to it at all; it reads as a filter laid
+over a flat image, which is exactly what "too obvious" and "doesn't look
+3D" were describing. It also explains "not flowy" as a side effect rather
+than a separate complaint: a uniform dark ring around the whole disc
+competes with the ribbon pattern for attention instead of receding behind
+it.
+
+(The very first globe implementation, before the fBm ocean shader existed,
+did have proper Lambertian wrap-lighting with a fixed light direction. It
+was dropped when the ocean shader replaced it and never reintroduced —
+rounds 3–4 added view-based limb/rim effects as a substitute, which solved
+a real but different problem, "does the sphere read as curved," without
+ever supplying the directional cue that makes something look *lit*.)
+
+**Fix, all in `GlobeSphere.tsx`'s `SURFACE_FRAGMENT`:**
+
+1. Added a fixed-**world**-space key light: `float lambert =
+   dot(vWorldNormal, uLightDir); float lit = smoothstep(-0.6, 0.9,
+   lambert); color *= mix(0.62, 1.12, lit);` — soft-wrapped (no hard
+   terminator line) so it stays calm rather than dramatic, and gentle
+   enough that the unlit side still clearly shows the ribbon pattern
+   rather than going near-black.
+2. This needs a new `vWorldNormal` varying
+   (`normalize(mat3(modelMatrix) * normal)`), not the existing
+   `vViewNormal`. Getting this right matters: a *view-space* light would
+   swing around with the camera as the user drags, which is the exact
+   same flattening problem in a different guise — the light has to be
+   fixed relative to the globe's actual geography, not the viewer.
+3. The old view-based limb darkening and atmosphere rim didn't disappear
+   — they were cut to a whisper, since the key light now does the "reads
+   as a sphere" work: limb darkening floor `0.5 → 0.88`, its falloff
+   narrowed to just the true grazing angle; the additive rim scatter's
+   peak `0.6 → 0.2` and its falloff power `2.2 → 4.0`; the separate
+   atmosphere shell scaled down (`1.1 → 1.045`) with a narrower, dimmer
+   fresnel term (power `2.4 → 3.5`, peak alpha `0.42 → 0.22`).
+
+**Verifying it's actually world-space and not just "looks plausible in one
+screenshot"** mattered more than usual here, since a subtle bug (light
+computed in the wrong space) would look fine in a single frame and only
+reveal itself on rotation. Sampled average luminance in screen quadrants
+from `rotate-test.mjs`'s two output images at different camera angles:
+
+```
+rotate-1: { tl: 55.1, tr: 63.2, bl: 69.1, br: 18.3 }
+rotate-2: { tl: 18.6, tr: 39.8, bl: 19.4, br: 29.7 }
+```
+
+The same screen quadrants swap from bright to dark between the two shots
+(top-left 55→19, bottom-left 69→19) — confirming the light is tied to the
+globe's geography, not the screen. A camera-relative bug would have kept
+these numbers roughly constant across both shots.
 
 ## Build bugs worth knowing about (fixed, but instructive)
 

@@ -9,9 +9,11 @@ const SURFACE_VERTEX = /* glsl */ `
   varying vec3 vPos;
   varying vec3 vViewNormal;
   varying vec3 vViewPosition;
+  varying vec3 vWorldNormal;
   void main() {
     vPos = normalize(position);
     vViewNormal = normalize(normalMatrix * normal);
+    vWorldNormal = normalize(mat3(modelMatrix) * normal);
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     vViewPosition = mvPosition.xyz;
     gl_Position = projectionMatrix * mvPosition;
@@ -25,8 +27,10 @@ const SURFACE_FRAGMENT = /* glsl */ `
   varying vec3 vPos;
   varying vec3 vViewNormal;
   varying vec3 vViewPosition;
+  varying vec3 vWorldNormal;
 
   uniform sampler2D uLandMask;
+  uniform vec3 uLightDir; // fixed world-space direction, NOT view-relative
   uniform float uTime;
   uniform vec3 uFlowBias;   // Helena's current heading, as a rough global bias (see note below)
   uniform float uEnergy01;  // Helena's current energy, normalised 0..1
@@ -116,15 +120,29 @@ const SURFACE_FRAGMENT = /* glsl */ `
 
     color = mix(color, uCoastColor, stroke);
 
-    // Curvature-driven shading from the true per-fragment view direction.
-    // Previous round darkened the limb almost to black, which read as a
-    // dark ball sitting inside a separate glowing ring. A real lit planet
-    // does the opposite at the edge: mild surface falloff, then additive
-    // atmospheric scattering that peaks exactly at the silhouette.
+    // Directional key light, fixed in WORLD space — this is the actual "it
+    // looks like a lit 3D sphere" cue: one side brighter, the other darker,
+    // soft terminator between them (no hard line — calm, not dramatic).
+    // Previous rounds instead darkened/glowed symmetrically around the
+    // camera axis (brightest dead-centre, fading toward every edge
+    // equally). That is a radial vignette, not sphere lighting — it reads
+    // as a filter laid over a flat image precisely because it has no
+    // direction, and it's what "the shading looks too obvious, doesn't
+    // look 3D" was describing. Must be world-space, not view-space: a
+    // camera-relative light would swing around with the camera as the user
+    // drags, which is the same flattening problem wearing a different hat.
+    float lambert = dot(vWorldNormal, uLightDir);
+    float lit = smoothstep(-0.6, 0.9, lambert);
+    color *= mix(0.62, 1.12, lit);
+
+    // What used to carry the "sphere" read on its own is now just a
+    // whisper: a near-imperceptible grazing-angle falloff, and a thin
+    // rim catch-light rather than a bright halo competing with the
+    // ribbons for attention.
     vec3 viewDir = normalize(-vViewPosition);
     float facing = clamp(dot(normalize(vViewNormal), viewDir), 0.0, 1.0);
-    color *= mix(0.5, 1.0, smoothstep(0.0, 0.55, facing));
-    color += uScatterColor * pow(1.0 - facing, 2.2) * 0.6;
+    color *= mix(0.88, 1.0, smoothstep(0.0, 0.25, facing));
+    color += uScatterColor * pow(1.0 - facing, 4.0) * 0.2;
 
     gl_FragColor = vec4(color, 1.0);
   }
@@ -152,8 +170,8 @@ const ATMOSPHERE_FRAGMENT = /* glsl */ `
     // more negative further round the far side) — remap that to a 0..1
     // glow brightest at the silhouette, never a flat/uniform ring.
     float facing = dot(normalize(vNormal), viewDir);
-    float fresnel = pow(clamp(1.0 + facing, 0.0, 1.0), 2.4);
-    gl_FragColor = vec4(uColor, fresnel * 0.42);
+    float fresnel = pow(clamp(1.0 + facing, 0.0, 1.0), 3.5);
+    gl_FragColor = vec4(uColor, fresnel * 0.22);
   }
 `;
 
@@ -217,6 +235,10 @@ export function GlobeSphere({ radius, lat, lon, headingDeg, energy01, octaves = 
       uFlowBias: { value: flowBias },
       uEnergy01: { value: energy01 },
       uOctaves: { value: octaves },
+      // World-space key light direction — soft upper-left bias, matching
+      // the reference's gentle overall brightness gradient. Fixed, not
+      // camera-relative (see the shading comment in SURFACE_FRAGMENT).
+      uLightDir: { value: new THREE.Vector3(-0.4, 0.55, 0.5).normalize() },
       uLandColor: { value: new THREE.Color('#0a1524') },
       uCoastColor: { value: new THREE.Color('#9fb4c6') },
       uOceanDeep: { value: new THREE.Color('#071528') },
@@ -249,7 +271,7 @@ export function GlobeSphere({ radius, lat, lon, headingDeg, energy01, octaves = 
         <sphereGeometry args={[radius, 128, 128]} />
         <shaderMaterial vertexShader={SURFACE_VERTEX} fragmentShader={SURFACE_FRAGMENT} uniforms={surfaceUniforms} />
       </mesh>
-      <mesh scale={1.1}>
+      <mesh scale={1.045}>
         <sphereGeometry args={[radius, 64, 64]} />
         <shaderMaterial
           vertexShader={ATMOSPHERE_VERTEX}

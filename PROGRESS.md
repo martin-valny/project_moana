@@ -331,6 +331,39 @@ the `<link>` is correct. And tuning was by eye against a painted/AI reference,
 so the target was matching character — elongation, scale, softness,
 luminosity, framing — not exact ribbon shapes.
 
+### Round 5: the shading model itself, not tuning
+
+Round 4 fixed structural composition problems. The user then looked again
+and said: *"the shading around globe is too obvious, it doesn't look 3d,
+flowy."* The globe by that point *did* have curvature-driven shading — so
+the question was why it still read as flat.
+
+**Diagnosis:** all of round 3/4's shading (limb darkening + atmosphere rim)
+was a function of `dot(normal, viewDirection)` only — rotationally symmetric
+around the camera axis, brightest dead-centre, darkening/glowing uniformly
+toward every point on the silhouette. That's a radial vignette, not sphere
+lighting. The actual cue for "lit 3D object" is a *directional* light: one
+side bright, the other dark, gradient between. A camera-relative symmetric
+falloff has no direction — it reads as a filter over a flat image, which
+is exactly what "too obvious, doesn't look 3D" was describing.
+
+**Fix:** added a fixed-**world**-space key light (soft-wrapped Lambertian,
+no hard terminator) as the primary shading term in `GlobeSphere.tsx`, and
+cut the old view-based limb darkening and atmosphere rim to a near-whisper
+— they no longer do the "reads as a sphere" work, the light does. Getting
+the light into world space rather than view space mattered specifically:
+a view-space light would swing around with the camera as the user drags,
+which is the same flattening bug wearing a different hat.
+
+**Verified it's actually world-space, not view-space**, since a bug there
+would look fine in one screenshot and only reveal itself on rotation:
+sampled average luminance in screen quadrants from `rotate-test.mjs`'s two
+differently-angled outputs — `{tl:55,tr:63,bl:69,br:18}` vs.
+`{tl:19,tr:40,bl:19,br:30}`. The same screen quadrants flip from bright to
+dark between shots, confirming the light tracks the globe's geography, not
+the screen. Full detail in `phase-0-prototype/README.md`'s "Round 5"
+section, including the exact before/after uniform values.
+
 ### Verified, and how
 
 No physical phone or human testers were available in this session, so
