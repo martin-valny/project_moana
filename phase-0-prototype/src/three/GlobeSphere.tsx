@@ -58,7 +58,8 @@ const SURFACE_FRAGMENT = /* glsl */ `
   uniform vec3 uOceanDeep;
   uniform vec3 uOceanMid;
   uniform vec3 uOceanBright; // authored >1.0 so only ribbon crests trip the bloom threshold
-  uniform vec3 uOceanTeal;
+  uniform vec3 uSwellWeak;   // light blue — weak local swell energy
+  uniform vec3 uSwellStrong; // deep purple — strong local swell energy
   uniform vec3 uScatterColor;
 
   ${SIMPLEX_NOISE_GLSL}
@@ -152,6 +153,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
 
       vec3 flowAccum = vec3(0.0);
       float energyAccum = 0.0;
+      float poleAccum = 0.0;
 
       for (int i = 0; i < MAX_SOURCES; i++) {
         if (i >= uSourceCount) break;
@@ -187,10 +189,57 @@ const SURFACE_FRAGMENT = /* glsl */ `
         vec3 awayRaw = vPos * dot(S, vPos) - S;
         float awayLen = length(awayRaw);
         vec3 away = awayLen > 1e-4 ? awayRaw / awayLen : D;
+        // away has the exact same hairy-ball singularity toP did above — the
+        // bearing AWAY from the source sweeps through its full range over a
+        // tiny distance near the source's own origin, same underlying cause.
+        // Round 9's poleFade fix only ever blended spread (the cone-test
+        // magnitude), never this direction, so it was still fed into
+        // flowAccum raw. That was already a latent bug; the round-10 sharpen
+        // below turned it into a visible pinwheel/starburst, by concentrating
+        // weight most heavily exactly at d=0 (falloff peaks there) — right
+        // where this direction is least defined. Same fix as spread: blend
+        // toward the stable source direction D near the origin.
+        away = normalize(mix(D, away, poleFade));
 
-        flowAccum += away * w;
+        // Round 10: sharp dividing lines where two sources' fans overlap at
+        // comparable strength — the user spotted this and proposed the fix
+        // themselves. flowAccum used to be a plain linear sum of away * w;
+        // where two sources have similar w but different away directions,
+        // f = normalize(flowAccum) depends sensitively on their exact weight
+        // ratio, so it sweeps through a range of directions over a narrow
+        // spatial band as dominance flips from one source to the other. That
+        // wouldn't matter for a colour blend, but f feeds straight into the
+        // anisotropic noise stretch below, and noise is chaotic with respect
+        // to its sampling direction — a smooth rotation of f renders as a
+        // visible seam. Lateral inhibition: sharpen the weight used for
+        // DIRECTION only, so the locally-strongest source dominates instead
+        // of being averaged with weaker neighbours. Energy stays a true sum
+        // (unchanged below) — overlapping swells genuinely do carry more
+        // combined energy, and that part already read fine.
+        float wDir = pow(w, 3.0);
+        flowAccum += away * wDir;
         energyAccum += w;
+        poleAccum += poleFade * w;
       }
+
+      // poleFade blending away toward D removes the point singularity at
+      // d=0 (the pinwheel above), but does not remove the transition band
+      // itself: away_raw's bearing-dependence doesn't care where poleFade
+      // is in its ramp, so across roughly d in (0, 0.26) the blended away
+      // still visibly twists from "locked to D" toward "true outward
+      // bearing" as the fragment's bearing around the source changes —
+      // this rotation showed up in testing as a soft spiral/vortex ring
+      // around each source's origin once the anisotropic stretch below
+      // picked it up (a rotated field direction, evaluated at a scale
+      // small enough to matter, still perturbs which noise is sampled).
+      // Rather than chase the twist itself, suppress anisotropy — not
+      // direction — in the same zone: energy-weighted average of poleFade
+      // across whichever source(s) actually dominate here, so the near-
+      // origin zone (any source's) renders as an isotropic soft cloud
+      // (no streak direction to twist) instead of a stretched pinwheel,
+      // consistent with the existing spread fade's own physical framing —
+      // a storm's generation area isn't organized into a direction yet.
+      float poleConfidence = energyAccum > 1e-4 ? clamp(poleAccum / energyAccum, 0.0, 1.0) : 1.0;
 
       // Fragments outside every source's reach (most of the globe, most of
       // the time) get a fallback axis purely to keep the anisotropic warp
@@ -226,15 +275,29 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // small both there AND in genuinely calm water far from any source —
       // exactly the two places a confident direction shouldn't be trusted —
       // so it doubles as the fade signal for free.
-      float dirConfidence = clamp(flowMag * 6.0, 0.0, 1.0);
+      // poleConfidence multiplies in here too: near a source's own origin,
+      // away is now locked to the stable D (see above), so flowMag alone
+      // reads as high confidence even though the direction is only stable
+      // because it's pinned, not because the field has actually organised
+      // — exactly the zone the spiral artifact came from.
+      float dirConfidence = clamp(flowMag * 6.0, 0.0, 1.0) * poleConfidence;
       vec3 along = dot(vPos, f) * f;
       vec3 across = vPos - along;
       vec3 coord = along * mix(1.0, 0.35, dirConfidence) + across * mix(1.0, 1.75, dirConfidence);
 
       // Travel along the flow, plus a slow independent evolution so the
       // field never reads as a rigid texture sliding past.
-      coord += f * (uTime * 0.025);
-      vec3 evolve = f * 0.15 + vec3(uTime * 0.009);
+      //
+      // Both terms below multiply f by dirConfidence — without this, even
+      // once the stretch ratio above correctly fades to isotropic near a
+      // source's own origin, these two still fed raw (unfaded) f straight
+      // into the domain warp's offset. Domain warping is *designed* to
+      // amplify small input changes, so f's residual rotation there alone
+      // was enough to redraw the spiral the stretch fade was supposed to
+      // remove — found by testing a rotated camera angle that brought a
+      // source's own origin (not just an inter-source seam) into frame.
+      coord += f * (uTime * 0.025) * dirConfidence;
+      vec3 evolve = f * 0.15 * dirConfidence + vec3(uTime * 0.009);
 
       // Moderate warp: enough for gentle S-curves and feathering, not so
       // much that it curls the streaks back into noodles. Round 7: octave
@@ -262,27 +325,24 @@ const SURFACE_FRAGMENT = /* glsl */ `
       float crest = smoothstep(0.34, 0.70, n);
       crest = pow(crest, 2.0);
 
-      // Teal shows up as broad regional patches, as in the reference —
-      // low frequency and tied to position, not to the ribbon noise.
-      // Round 7: raised the frequency (0.55 -> 1.7, so a whole visible
-      // hemisphere can't land entirely inside one "zero" region of this
-      // field) — but that alone didn't fix it. The REAL bug, found only by
-      // reasoning through the blend chain after screenshots kept showing
-      // zero teal at every camera angle: this used to be two independent
-      // sequential mix() calls (deep -> teal, then separately deep -> mid),
-      // and the second one's weight (up to 0.85) overwrote almost all of
-      // what the first one set, structurally, regardless of tealPatch's
-      // value. Fixed by blending mid/teal into ONE colour first, then
-      // mixing that single result in once.
-      // Round 8b: once the blend bug above was fixed and the bands were
-      // softened, this went straight past "present" to "vivid emerald
-      // blotches over half the ocean". Threshold raised (smaller, rarer
-      // patches) and the blend itself capped at 0.6 so even a full patch
-      // only tints toward green rather than replacing the blue outright —
-      // in the reference the green is a regional tint within the water,
-      // never its own colour field.
-      float tealPatch = smoothstep(0.28, 0.78, snoise(vPos * 1.35 + 17.0));
-      vec3 midOrTeal = mix(uOceanMid, uOceanTeal, tealPatch * 0.6);
+      // Round 10: replaces the old teal patches (a regional tint driven by
+      // arbitrary positional noise, unrelated to any actual swell data) with
+      // a strength-coded colour ramp the user asked for directly: light blue
+      // for weak local swell energy, deep purple for strong. fieldEnergy01
+      // is already exactly the right per-fragment signal — zero outside
+      // every source's footprint, rising toward each source's own weight
+      // inside it — so this both answers the colour-scheme ask and, for
+      // free, makes each source's directional cone legible as a shape: the
+      // cone geometry (spread x arrived, below) already existed, it just
+      // rendered in nearly the same blue as the calm water around it. Now a
+      // strong swell's wedge visibly reads as purple fanning out from its
+      // origin and fading to light blue at its edges, exactly where the
+      // cone geometry itself already tapers to zero. The x1.4 gain lets the
+      // ramp reach full strength before fieldEnergy01's own 1.0 clamp, so
+      // weak-but-present swells still show visible colour instead of
+      // staying indistinguishable from calm uOceanMid water.
+      vec3 swellColor = mix(uSwellWeak, uSwellStrong, fieldEnergy01);
+      vec3 midColor = mix(uOceanMid, swellColor, clamp(fieldEnergy01 * 1.4, 0.0, 1.0));
 
       // Round 8: band weight 0.85 -> 0.72 so the ribbons stay translucent
       // over the base rather than fully replacing it — part of what makes
@@ -294,8 +354,24 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // filaments laid over it — whereas pushing band coverage up had
       // filled most of the ocean with a uniform mid-blue and flattened
       // exactly that range. Less fill, more highlight.
-      oceanColor = mix(oceanColor, midOrTeal, band * 0.60);
-      oceanColor = mix(oceanColor, uOceanBright, crest * 0.38);
+      // The colour ramp's penetration scales up with energy too — at low
+      // energy this matches round 8's original 0.60 exactly (unchanged
+      // look for calm/background water), but a strong swell's core needs
+      // the purple to actually read as dominant, not just tint through a
+      // thin veil.
+      oceanColor = mix(oceanColor, midColor, band * mix(0.60, 0.88, fieldEnergy01));
+      // Round 10: without this, uOceanBright (a flat near-white) painted
+      // straight over the strongest part of every swell's core, exactly
+      // where the purple ramp above should be most visible — a strong
+      // swell's crest and its most energetic point are the same place. A
+      // flat white crest there reads as generic sea foam and erases the
+      // colour signal right where it matters most. Tinting the crest
+      // highlight itself toward swellColor keeps crests reading as bright
+      // (still uOceanBright-dominant, never as dark as swellColor alone)
+      // while letting a strong swell's foam carry a violet-white cast
+      // instead of plain white.
+      vec3 crestColor = mix(uOceanBright, swellColor, fieldEnergy01 * 0.6);
+      oceanColor = mix(oceanColor, crestColor, crest * 0.38);
       // Real bathymetric/current texture as a subtle multiply on top of the
       // procedural ribbons — grounds them in actual geography instead of
       // being the sole source of ocean detail.
@@ -511,7 +587,8 @@ export function GlobeSphere({ radius, pulse, offsetHours, octaves = 5 }: GlobeSp
       uOceanDeep: { value: new THREE.Color('#0a1c33') },
       uOceanMid: { value: new THREE.Color('#356da4') },
       uOceanBright: { value: new THREE.Color('#e6fbff').multiplyScalar(1.55) },
-      uOceanTeal: { value: new THREE.Color('#3c6a52') },
+      uSwellWeak: { value: new THREE.Color('#8fd6f0') },
+      uSwellStrong: { value: new THREE.Color('#a855f7') },
       uScatterColor: { value: new THREE.Color('#5aa8cc') },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
