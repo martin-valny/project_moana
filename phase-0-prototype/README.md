@@ -5,18 +5,23 @@ fake swell ("Helena") crossing the North Atlantic, rendered on a cinematic
 dark globe, with a draggable timeline, tap-to-select, and local-only
 Follow.
 
-The visual engine (the globe surface itself) is on its fifth iteration.
+The visual engine (the globe surface itself) is on its seventh iteration.
 Round 1 used a GPU particle field. Round 2 replaced it with a domain-warped
 fractal-noise shader. Round 3 fixed missing curvature shading, a dead bloom
 pipeline, and several CSS bugs. Round 4 was the first pass with the actual
 reference image in hand and fixed structural issues (anisotropic ribbons,
 framing, a real land-mask bug). Round 5 replaced the shading model
 itself — the globe had curvature but no actual light, which read as "obvious"
-shading rather than a lit 3D object. Round 6 (current) wasn't new user
-feedback — it evaluated an external "visual fix pack" against the real
-build, rejected 4 of its 5 claims as stale/inapplicable, and fixed the one
-real issue it found (a straight-segment swell path, now a true spline). See
-"Round 5" and "Round 6" below.
+shading rather than a lit 3D object. Round 6 evaluated an external "visual
+fix pack" against the real build, rejected 4 of its 5 claims as
+stale/inapplicable, and fixed the one real issue it found (a
+straight-segment swell path, now a true spline). Round 7 (current) — after
+the user posted the actual reference image directly and rejected another
+round of pure parameter tuning — replaced flat procedural land/ocean colour
+with real Earth texture data, and fixed two real bugs a naive tuning pass
+would never have caught (a too-gentle land-luminance curve leaking a bright
+satellite-photo look, and a blend-chain bug that made every teal-weight
+increase a no-op). See "Round 5", "Round 6", and "Round 7" below.
 
 ## Run it
 
@@ -469,6 +474,108 @@ Left as a flagged, not-yet-fixed item rather than bumping the timeout —
 it's a session/environment-speed question outside this review's scope, and
 one confirmed reproduction under a 30s ceiling isn't enough to be sure
 8000ms is wrong everywhere versus just slow here.
+
+## Round 7: real Earth textures, not another procedural-tuning pass
+
+The user posted the actual reference image directly in conversation for
+the first time and said the round-6 build "doesn't look anything like
+this." A first plan draft proposed the same kind of thing every round
+since 2 had done — nudge shader colour/threshold constants, re-screenshot,
+compare by eye. The user rejected that: *"make sure you are going to
+transform it onto reference picture... not just do another round of
+expensive iteration... check all tools that can be used to render it
+pretty premium feel."*
+
+**What that pushback actually unlocked:** testing direct network calls
+from this sandbox found `raw.githubusercontent.com` and
+`registry.npmjs.org` reachable, even though NASA's own image servers and
+Wikimedia are blocked at the proxy — a materially different, more
+permissive network policy than the fully-offline sandbox described
+elsewhere in this project's history (see `PROGRESS.md`'s Phase −1
+section). That meant real Earth texture data was actually fetchable, which
+changes the right move entirely: ground the render in real
+photographic/data texture instead of trying to fake that level of detail
+from noise parameters alone.
+
+**Assets used**, downloaded and visually inspected (not just assumed
+correct) before committing to them: `earth-night.jpg` and
+`earth-water.png` from `vasturiano/three-globe`'s demo assets — an
+MIT-licensed, widely-used data-viz-globe library (not adopted as a
+dependency; just its demo textures, the standard NASA-Blue-Marble-derived
+imagery reused across the three.js ecosystem for years). `earth-night.jpg`
+turned out to already sit close to this app's own established dark navy
+palette when inspected directly — real continent structure and subtle
+city-light warmth, still dark and atmospheric rather than a legible
+daytime map. `earth-water.png` is a real, much higher-fidelity land/ocean
+mask (actual river networks visible) than this project's own hand-rolled
+scanline-fill mask. **Flag, not silent (§0 rule 2):** third-party mirror,
+not NASA's own distribution — written up with the source/caveat in
+`public/textures/SOURCES.md`, worth revisiting before any release beyond
+the immediate working group.
+
+**The technical change, in `GlobeSphere.tsx`:** the real texture is now
+sampled at every fragment and used for both land (replacing a flat
+near-invisible colour) and as a subtle real-detail multiply layered under
+the existing procedural ocean ribbons — not as a replacement for them. The
+anisotropic domain-warp ribbon shader itself (rounds 2/4's real
+engineering) is untouched. Also: the octave cap that silently limited the
+ribbon noise to 3 octaves regardless of quality tier (`qualityTier.ts`
+budgets 5 on the high tier, but the shader never used more than 3) now
+uses the tier's real budget; the atmosphere fresnel (cut to "a whisper" in
+round 5 specifically because it was fighting camera-relative shading for
+attention — a problem round 5 itself already solved) is brighter and
+broader; the exposure range is wider throughout. `Globe.tsx` gained a
+colour-grade pass (`HueSaturation`/`BrightnessContrast`/`ToneMapping`)
+using `postprocessing` effects that were already a dependency but unused —
+deliberately applied *after* Bloom in the composer chain, not via
+`renderer.toneMapping`, specifically so it doesn't reintroduce round 3's
+already-diagnosed tone-mapping/bloom-clamping bug (verified: bloom
+highlights are still visibly present in every post-change screenshot).
+
+**Two real bugs, found by actually screenshotting and reasoning about the
+code — not by guessing at more numbers:**
+
+1. **Land leaked a bright, uniform, satellite-photo tan** across every
+   continent on the first render — nothing like "mostly dark,
+   distinguishable via subtle warmth," and nothing like the reference's
+   more muted continents either. `pow(nightLum, 0.8)` was too gentle a
+   curve: ordinary mid-grey terrain luminance (which most land pixels
+   have) wasn't suppressed enough before being added on top of the
+   near-black base. Fixed with a much steeper `pow(nightLum, 2.2)`, so
+   only genuinely bright source pixels (city lights, ice sheets) lift
+   noticeably.
+2. **Teal was completely invisible — at every camera angle tested (4
+   independent screenshots: 2 default, 2 rotated).** First guess was a
+   frequency/threshold problem (the teal noise field's own features were
+   wide enough that a whole visible hemisphere could land inside one
+   "zero" region) — raised both the frequency and the blend weight. No
+   change at all. **The real cause, found only by reading through the
+   blend chain line by line rather than tuning yet another number:** the
+   ocean colour block was two independent, sequential `mix()` calls (deep
+   → teal, then separately deep → mid). The second call's weight (up to
+   0.85) structurally overwrote almost everything the first one set,
+   *regardless* of the teal weight — raising that weight could never have
+   fixed this. Fixed by blending mid/teal into one colour first
+   (`mix(uOceanMid, uOceanTeal, tealPatch)`), then mixing that single
+   result in once. Verified with fresh screenshots at multiple angles:
+   real teal/green patches now visible, integrated with the bright ribbon
+   crests rather than washed out by the second mix.
+
+**An already-known issue recurred during verification, not caused by this
+round:** `smoke-test.mjs`'s Follow-Swell click hit the same hardcoded-8s
+timeout documented in round 6 — same failure mode (this sandbox's
+software-rendered WebGL, sometimes too loaded in a given session for an 8s
+click-actionability window). Not re-diagnosed since round 6 already did
+the full workup; now recurring across two separate sessions, so worth
+bumping the timeout in `smoke-test.mjs:45` outright if it happens a third
+time rather than re-investigating from scratch again.
+
+**Not independently verified against the literal reference image
+pixel-for-pixel**: worked from the image as seen in conversation plus a
+detailed description captured while writing the plan, not a saved file on
+disk — the user didn't provide one as a file this round. `public/textures/`
+is proof this sandbox can now persist and use a real image file if a
+future round gets one.
 
 ## Build bugs worth knowing about (fixed, but instructive)
 

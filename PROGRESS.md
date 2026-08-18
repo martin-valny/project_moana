@@ -1,7 +1,7 @@
 # Project Moana — Progress Report
 
 Last updated: 2026-08-18, branch `claude/moana-master-build-plan-v2-zjs07y`,
-HEAD `677e00a`. Working tree clean, everything below is pushed.
+HEAD `349f4fb`. Working tree clean, everything below is pushed.
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -17,28 +17,29 @@ product vision and rules; this file is the build/validation log against it.
 
 **Phase −1 is passed (decided 2026-08-17). Phase 0's visual prototype
 (`phase-0-prototype/`) has had five rounds of direct user feedback against a
-reference image (round 5: the globe's lighting model itself), plus a sixth
-round (§"Round 6" below) evaluating an externally-supplied "visual fix pack"
-against the actual rendered build — four of its five claims turned out to
-describe a stale/generic state rather than this codebase and were rejected;
-one had a real kernel of truth (the swell path was a straight-segment
-polyline, now a true spline) and was fixed. It is functionally complete and
-automatically verified, but has not been shown to the user for a fresh
-open-ended look since round 5, and still needs the plan's actual falsifiable
-gate — five non-surfers timed on a physical phone — which no agent session
-can run itself.**
+reference image, a sixth round reviewing an external "visual fix pack," and
+a seventh round (§"Round 7" below) that replaced flat procedural colour
+with real Earth texture data after the user posted the actual reference
+image directly and rejected a first plan draft as "another round of
+expensive iteration." It is functionally complete and automatically
+verified, but has not been shown to the user for a fresh open-ended look
+since round 7 landed, and still needs the plan's actual falsifiable gate —
+five non-surfers timed on a physical phone — which no agent session can run
+itself.**
 
 **If you're picking this up cold, read in this order:** (1) this "Status"
 section, (2) "What's next" near the bottom for the immediate action, (3) the
-"Round 6" subsection under "Phase 0" for the most recent thread (a fix-pack
-review, not new user feedback — see it for how to evaluate one of these
-without trusting it blindly), (4) "Round 5" for the last actual visual
-change, (5) skim "What was built" and rounds 2–4 for context on how the
-visual engine got here. Don't start a "round 7" of self-directed visual
-tuning purely on your own initiative — rounds 2-5 were each a direct
-response to the user looking at a screenshot and saying what was wrong; if
-the user hasn't given new feedback, the right move is to ask them to look at
-it again, not to guess at further changes.
+"Round 7" subsection under "Phase 0" for the most recent thread (real
+texture assets + two real shader bugs found by actually screenshotting and
+reasoning through the code, not guessing at numbers), (4) "Round 6" for how
+to evaluate an external critique without trusting or dismissing it blindly,
+(5) "Round 5" for the last pre-texture visual change, (6) skim "What was
+built" and rounds 2–4 for context on how the visual engine got here. Don't
+start a "round 8" of self-directed visual tuning purely on your own
+initiative — get a fresh look from the user first; if they have specific
+feedback, "Round 7"'s pattern (real screenshots, real reasoning about why a
+value isn't producing the expected pixels, not just nudging numbers) should
+transfer directly.
 
 ---
 
@@ -461,7 +462,109 @@ this review's scope and the failure is session/environment-speed-dependent,
 not deterministic — worth knowing if a future run hits it again, but not
 worth chasing further without evidence it's more than that.
 
-### Verified, and how (current as of round 6, HEAD `677e00a`)
+### Round 7: real Earth textures, not another procedural-tuning pass
+
+The user posted the actual reference image directly in conversation for the
+first time this session, looked at the round-6 build, and said it "doesn't
+look anything like this." A first plan draft proposed the same kind of
+thing rounds 2–6 had all been doing — nudge shader colour/threshold
+constants, re-screenshot, compare by eye. The user rejected that outright:
+*"make sure you are going to transform it onto reference picture... not
+just do another round of expensive iteration... check all tools that can
+be used to render it pretty premium feel."* That pushback was correct and
+led somewhere real.
+
+**What actually changed the plan:** testing direct network reachability
+from this sandbox found that `raw.githubusercontent.com` and
+`registry.npmjs.org` are reachable even though NASA's own image servers and
+Wikimedia are blocked at the proxy — a different, more permissive network
+policy than the fully-offline one described earlier in this file (Phase −1
+section). That meant *real* Earth texture data was actually fetchable here,
+which changes the right approach entirely: ground the render in real
+photographic/data texture instead of trying to fake that detail from
+noise parameters alone.
+
+**Assets used** (downloaded and *visually inspected* before committing to
+them, not assumed): `earth-night.jpg` and `earth-water.png`, fetched from
+`vasturiano/three-globe`'s demo assets (an MIT-licensed, widely-used
+data-viz-globe library — not adopted as a dependency, just its demo
+textures). `earth-night.jpg`'s night-lights imagery turned out to already
+sit close to this app's own established dark navy palette — continents
+read as structurally distinct from ocean (real coastline shape, subtle
+city-light warmth) while staying dark and atmospheric rather than becoming
+a legible daytime map. `earth-water.png` is a real, much higher-fidelity
+land/ocean mask (with actual river networks) than this project's own
+hand-rolled scanline-fill mask. **Flag, not silent (§0 rule 2, same
+standard as round 2's wordmark flag):** these are a third-party mirror, not
+NASA's own distribution — reasonable for continued prototype work, written
+up with the exact source/caveat in `public/textures/SOURCES.md`, worth a
+real look before any release beyond the immediate working group.
+
+**The actual technical change** (`GlobeSphere.tsx`): the real texture is
+now sampled at every fragment and used for both land (replacing a flat
+near-invisible colour) and as a subtle real-detail multiply on the
+existing procedural ocean ribbons, rather than being the *only* source of
+surface detail. The anisotropic domain-warped fBm ribbon shader itself
+(rounds 2/4's real engineering) is untouched — this is a texture/colour
+layer added under it, not a rebuild. Also: the octave cap that silently
+limited the ribbon noise to 3 octaves regardless of quality tier (high
+tier pays for 5 in `qualityTier.ts` but the shader never used more than 3)
+is now the tier's real budget; the atmosphere glow (cut to "a whisper" in
+round 5 specifically because it was fighting camera-relative shading for
+attention — a problem round 5 itself already solved) is brighter and
+broader; exposure is brighter throughout. `Globe.tsx` gained a
+colour-grade pass (`HueSaturation`/`BrightnessContrast`/`ToneMapping`) using
+`postprocessing` effects that were already a dependency but unused —
+applied *after* Bloom in the composer chain specifically so it doesn't
+reintroduce round 3's already-diagnosed tone-mapping/bloom-clamping
+regression (verified: bloom highlights are still visible in every
+post-change screenshot).
+
+**Two real bugs found by actually screenshotting and reasoning about it,
+not by guessing at more numbers:**
+
+1. **Land leaked a bright, uniform, satellite-photo tan** across every
+   continent on the first pass — nothing like the intended "mostly dark,
+   distinguishable via subtle warmth" look, and nothing like the
+   reference's more muted continents either. Cause: `pow(nightLum, 0.8)`
+   is too gentle a curve — ordinary mid-grey terrain luminance (which most
+   land pixels have, city lights or not) wasn't being suppressed enough
+   before being added on top of the near-black base colour. Fixed with a
+   much steeper `pow(nightLum, 2.2)`, so only genuinely bright source
+   pixels (city lights, ice sheets) lift noticeably out of near-black.
+2. **Teal was completely invisible — in every screenshot, at every camera
+   angle tested (4 independent shots, 2 default + 2 rotated).** First
+   assumed this was a frequency/threshold problem (the teal noise field's
+   features were wide enough that a whole visible hemisphere could land in
+   one "zero" region) and raised both — no change. **The real cause, found
+   by reading the blend chain rather than tuning another number:** the
+   ocean colour block was two independent sequential `mix()` calls (deep
+   → teal, then separately deep → mid). The second call's weight (up to
+   0.85) structurally overwrote almost everything the first one set,
+   *regardless* of the teal blend weight — raising that weight could never
+   have fixed it. Fixed by blending mid/teal into one colour first
+   (`mix(uOceanMid, uOceanTeal, tealPatch)`), then mixing that single
+   result in once. Verified with fresh screenshots at multiple angles
+   showing real teal/green patches, integrated with the bright ribbon
+   crests rather than washed out by them.
+
+**An unrelated, already-known issue recurred during verification, not
+caused by this round's changes:** `smoke-test.mjs`'s Follow-Swell click
+step hit the same hardcoded-8s timeout documented in round 6 — same
+failure mode, same root cause (this sandbox's software-rendered WebGL,
+sometimes too loaded in a given session for an 8s click-actionability
+window). Not investigated again since round 6 already diagnosed it in
+full; still flagged as a possible test-timeout bump if it keeps recurring.
+
+**Not independently verified against the literal reference image
+pixel-for-pixel** — this round worked from the image as seen in
+conversation plus the detailed description captured while writing the
+plan, not a saved file on disk (the user didn't provide one as a file, and
+this round didn't block on asking for it). If a future round wants a
+tighter comparison, ask the user for the image as a file this time —
+`public/textures/` is proof this sandbox can actually persist and use one.
+
+### Verified, and how (current as of round 7, HEAD `349f4fb`)
 
 No physical phone or human testers were available in this session, so
 verification stopped at what automation can actually confirm. Four scripts
@@ -479,14 +582,14 @@ at it, all worth re-running after any further shader/UI change:
   rendered position actually moves, opens the "About the data" sheet via
   the wordmark and confirms its content, confirms **no** standalone
   attribution text sits in the main view, zero console/page errors. Passed
-  both viewports historically; **as of round 6, the Follow Swell click step
-  timed out at its hardcoded 8000ms in this specific sandbox session** —
-  confirmed session/environment-speed-related, not a real defect or a
-  regression (see "Round 6" above for the full diagnosis: the click
-  succeeds at ~10.2s under a longer timeout, and the same timeout
-  reproduces identically on unmodified pre-round-6 code). If this recurs,
-  the fix is bumping that one `.click({ timeout: ... })` call, not chasing
-  a phantom UI bug.
+  both viewports historically; **the Follow Swell click step has now timed
+  out at its hardcoded 8000ms in two separate sessions (rounds 6 and 7)** —
+  still session/environment-speed-related, not a real defect (round 6's
+  diagnosis: the click succeeds at ~10.2s under a longer timeout, and the
+  same timeout reproduces on unmodified code), but recurring across
+  sessions is worth noting as a pattern, not just a one-off. If it recurs a
+  third time, just bump the timeout in `smoke-test.mjs:45` — no further
+  diagnosis needed, round 6 already did it.
 - **`?e2e=1` query param**: the app publishes Helena's projected marker
   screen position on `window.__moanaMarker` when present. Added in round 4
   because sweeping screen coordinates to find a moving 3D marker is far too
@@ -510,6 +613,10 @@ at it, all worth re-running after any further shader/UI change:
   subjective and where a fresh look from the user matters most. Round 6
   added a sixth kind of check — verifying an external critique's claims
   against fresh screenshots rather than trusting or dismissing it outright.
+  Round 7 added a seventh — treating the reference image itself as ground
+  truth to fetch/verify real assets against, and reasoning through shader
+  blend logic line-by-line when a change didn't produce the expected pixels
+  instead of just trying another number.
 
 **One thing explicitly NOT verified in this sandbox**: round 4 added
 Cormorant Garamond (a Didone-family serif) via a Google Fonts `<link>` in
@@ -886,21 +993,21 @@ confirmed the existing decision rather than changing it.
 
 ## What's next
 
-**Immediate next step:** show the current build (HEAD `677e00a`) to the
-user again. Rounds 2-5 of visual iteration were each a direct response to
-specific feedback on a screenshot; round 6 was a review of an external
-critique, not new user feedback, and confirmed the visual is unchanged in
-substance (one small path-smoothing correctness fix, no user-visible
-redesign). There's still no signal that round 5 (the lighting-model fix) is
-the last visual change actually needed versus just the last one *requested
-so far*. Don't pre-emptively start a round 7 of self-directed tuning on your
-own judgement — get a fresh read first. If they're happy, move to the
-falsifiable test below; if not, `phase-0-prototype/README.md`'s "Round 5"
-section and this file's matching subsection show the pattern each round
-has followed (screenshot → specific diagnosis → targeted shader/CSS fix →
-`rotate-test.mjs`/`shot.mjs` re-verify), which should transfer directly. If
-another external critique/fix-pack shows up, "Round 6" above shows the
-pattern for evaluating one against real screenshots before touching
+**Immediate next step:** show the current build (HEAD `349f4fb`) to the
+user again. Round 7 was a real, substantial visual change (real Earth
+textures, not just parameter tuning) made in direct response to the user
+saying the previous build looked nothing like their reference — there is a
+genuine open question of whether it's now close enough, which only a fresh
+look can answer. Don't pre-emptively start a round 8 of self-directed
+tuning on your own judgement. If they're happy, move to the falsifiable
+test below; if not, "Round 7" above (and `phase-0-prototype/README.md`'s
+matching section) shows the pattern that actually worked this time —
+fetch/inspect real reference material and real texture assets where
+possible, take real screenshots and reason concretely about *why* a value
+isn't producing the pixels you expect (both round-7 bugs were found this
+way, not by more guessing) — which should transfer directly to further
+rounds. If another external critique/fix-pack shows up, "Round 6" shows
+the pattern for evaluating one against real screenshots before touching
 anything, rather than either blindly applying it or dismissing it.
 
 **Phase 0 is built** (`phase-0-prototype/`, see the section above) but
