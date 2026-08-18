@@ -1,6 +1,7 @@
 # Project Moana — Progress Report
 
-Last updated: 2026-08-17, branch `claude/moana-master-build-plan-v2-zjs07y`.
+Last updated: 2026-08-18, branch `claude/moana-master-build-plan-v2-zjs07y`,
+HEAD `acbb0cb`. Working tree clean, everything below is pushed.
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -14,12 +15,24 @@ product vision and rules; this file is the build/validation log against it.
 
 ## Status, one line
 
-**Phase −1 is passed (decided 2026-08-17). Phase 0 (the visual-only
-prototype, `phase-0-prototype/`) is built and verified by automated means
-— it still needs the plan's actual falsifiable gate, five non-surfers
-timed on a physical phone, which no agent session can run itself.**
-Everything below explains how both conclusions were reached and what's
-available to build on.
+**Phase −1 is passed (decided 2026-08-17). Phase 0's visual prototype
+(`phase-0-prototype/`) is on its fifth iteration of visual polish, driven by
+five rounds of direct user feedback against a reference image, most recently
+fixing the globe's lighting model itself (round 5, §"Round 5" below). It is
+functionally complete and automatically verified, but has not been shown to
+the user again since round 5 landed, and still needs the plan's actual
+falsifiable gate — five non-surfers timed on a physical phone — which no
+agent session can run itself.**
+
+**If you're picking this up cold, read in this order:** (1) this "Status"
+section, (2) "What's next" near the bottom for the immediate action, (3) the
+"Round 5" subsection under "Phase 0" for the most recent/likely-still-live
+thread, (4) skim "What was built" and rounds 2–4 for context on how the
+visual engine got here. Don't start a "round 6" purely on your own initiative
+— the last four rounds were each a direct response to the user looking at a
+screenshot and saying what was wrong; if the user hasn't given new feedback,
+the right move is to ask them to look at it again, not to guess at further
+changes.
 
 ---
 
@@ -364,24 +377,60 @@ dark between shots, confirming the light tracks the globe's geography, not
 the screen. Full detail in `phase-0-prototype/README.md`'s "Round 5"
 section, including the exact before/after uniform values.
 
-### Verified, and how
+### Verified, and how (current as of round 5, HEAD `acbb0cb`)
 
 No physical phone or human testers were available in this session, so
-verification stopped at what automation can actually confirm:
+verification stopped at what automation can actually confirm. Four scripts
+live in `phase-0-prototype/`, none of them a substitute for a human looking
+at it, all worth re-running after any further shader/UI change:
 
 - `npm run build` (typecheck + production build) and `npm run lint`
-  (oxlint) both clean.
-- A Playwright smoke test (`phase-0-prototype/smoke-test.mjs`) against the
-  built app in headless Chromium (iPhone-sized viewport): zero console/page
-  errors, taps Helena's marker and confirms the panel opens with her name,
-  clicks Follow and confirms `localStorage` persists
-  `["helena-phase0"]`, drag-rotates the globe and confirms the view
-  actually changes, moves the time scrubber to "3 Days" and confirms
-  Helena's rendered position changes, opens the attribution sheet and
-  confirms its content.
-- Manual visual review of six screenshots at each of those states (dark
-  navy palette, no red/orange/heat-map colours anywhere, no
-  dashboard/table/chart chrome, minimal panel matching §2.3 step 5).
+  (oxlint) both clean at HEAD.
+- **`smoke-test.mjs`** — the interaction regression check, run against
+  `npm run preview` on port 4173, both landscape (1600×900) and portrait
+  (430×932) viewports: taps Helena's marker via a `?e2e=1` test hook (see
+  below) and confirms the right-side panel opens with her name, clicks
+  Follow Swell and confirms `localStorage` persists
+  `["helena-phase0"]`, jumps the timeline to "3 Days" and confirms Helena's
+  rendered position actually moves, opens the "About the data" sheet via
+  the wordmark and confirms its content, confirms **no** standalone
+  attribution text sits in the main view, zero console/page errors. Passed
+  both viewports as of HEAD.
+- **`?e2e=1` query param**: the app publishes Helena's projected marker
+  screen position on `window.__moanaMarker` when present. Added in round 4
+  because sweeping screen coordinates to find a moving 3D marker is far too
+  slow under this sandbox's software-rendered WebGL — every synthetic click
+  waits on a real rendered frame, so a coordinate-grid search took minutes
+  per viewport before this existed.
+- `shot.mjs` — fast one-shot landscape+portrait screenshot pair, the loop
+  used while tuning the shader by eye against the reference image.
+- `rotate-test.mjs` — drags the globe to two different orientations and
+  screenshots both. This is also how round 5's lighting fix was verified as
+  genuinely world-space rather than camera-relative: sampling average
+  luminance in screen quadrants across the two shots showed the same
+  quadrants flip from bright to dark between them (`{tl:55,bl:69}` →
+  `{tl:19,bl:19}`), which a camera-relative bug would not produce.
+- `panel-glass-test.mjs` — rotates a bright/detailed globe region behind
+  the panel before opening it, confirming the panel's scrim stays faint
+  enough that globe detail is still visible through the text.
+- Manual visual review against the user-supplied reference image, by eye,
+  across five rounds of "here's what's still wrong" feedback (see the
+  "Round 3/4/5" subsections above) — this is the part that's genuinely
+  subjective and where a fresh look from the user matters most.
+
+**One thing explicitly NOT verified in this sandbox**: round 4 added
+Cormorant Garamond (a Didone-family serif) via a Google Fonts `<link>` in
+`index.html`. This sandbox's headless Chromium cannot reach
+`fonts.googleapis.com` — the proxy resets the CONNECT (confirmed: `curl`
+reaches it fine, so it's a browser-specific routing issue, not a dead
+host) — so every screenshot taken in this environment shows the Georgia
+fallback, not the intended typeface. The `<link>` markup is correct and
+will load normally in a real browser; if the next agent has real network
+access or the user is looking at it on their own machine, this is worth a
+fresh look, and if it still doesn't load, self-hosting the `.woff2` in
+`public/fonts/` would remove the dependency entirely (also required
+eventually anyway — the Expo port can't use a `<link>` tag and will need
+to bundle the font file via `expo-font`).
 
 ### What's still open — the actual gate
 
@@ -389,20 +438,22 @@ verification stopped at what automation can actually confirm:
 people who don't surf, say nothing, and time whether they rotate the globe
 unprompted for 30+ seconds."* This requires physical devices and real
 people in the room, which is outside what any agent session can do itself.
-Automated verification above (build/lint/smoke-test/screenshots) confirms
-the prototype is functionally correct and structurally on-brief; it is
-**not** a substitute for the actual human test, and Phase 0 should not be
-declared "passed" until that test happens. Recommended next step for
-whoever picks this up: `cd phase-0-prototype && npm install && npm run
-dev`, load it on a phone on the same network, and run the test as
-specified.
+Automated verification above confirms the prototype is functionally
+correct; it is **not** a substitute for the actual human test, and Phase 0
+should not be declared "passed" until that test happens, and not before the
+visual itself has stopped changing round-to-round (see "Status" above —
+five rounds of user feedback so far; check whether the user considers round
+5 the end of that or wants to look again before running the human test).
+Recommended next step for whoever picks this up: `cd phase-0-prototype &&
+npm install && npm run dev`, load it on a phone on the same network, and
+run the test as specified.
 
 Also not yet done, lower-priority than the human test: no dynamic/battery
 adaptive-quality logic (§5.3's "adaptive quality" is scoped to the mobile
 build, not required for a web-authored Phase 0 prototype, but worth a
 reminder it's not here yet); the production JS bundle is ~1.2MB
 un-code-split (fine for a local prototype, would want addressing before
-any real deployment).
+any real deployment); the webfont-loading gap just above.
 
 ---
 
@@ -742,13 +793,25 @@ confirmed the existing decision rather than changing it.
 
 ## What's next
 
+**Immediate next step:** show the current build (HEAD `acbb0cb`) to the
+user again. Five rounds of visual iteration have each been a direct
+response to specific feedback on a screenshot; there's no signal right now
+that round 5 (the lighting-model fix) is the last one needed versus just
+the last one *requested so far*. Don't pre-emptively start a round 6 on
+your own judgement — get a fresh read first. If they're happy, move to the
+falsifiable test below; if not, `phase-0-prototype/README.md`'s "Round 5"
+section and this file's matching subsection show the pattern each round
+has followed (screenshot → specific diagnosis → targeted shader/CSS fix →
+`rotate-test.mjs`/`shot.mjs` re-verify), which should transfer directly.
+
 **Phase 0 is built** (`phase-0-prototype/`, see the section above) but
 **not yet passed** — it's blocked on the one thing no agent session can do
 itself: handing a phone to five non-surfers and timing whether they rotate
 the globe unprompted for 30+ seconds. Whoever picks this up next should
-run that test before treating Phase 0 as cleared and moving to Phase 1. If
-it fails, §8 says iterate on shaders/motion/typography rather than adding
-data complexity to compensate.
+run that test — once the user is done iterating on the visual — before
+treating Phase 0 as cleared and moving to Phase 1. If it fails, §8 says
+iterate on shaders/motion/typography rather than adding data complexity to
+compensate.
 
 **Once Phase 0 actually passes, Phase 1** (`MASTER_BUILD_PLAN.md` §8):
 global marine data ingestion — the scheduled job writing static JSON to
