@@ -5,6 +5,7 @@ import { SIMPLEX_NOISE_GLSL } from './shaders/noise';
 import { FBM_GLSL } from './shaders/fbm';
 import { MAX_SWELL_SOURCES, angularFrontDistanceRad, buildSwellSources } from '../data/swellSources';
 import { normalizeEnergy } from '../data/interpolate';
+import { SWELL_WEAK, SWELL_STRONG } from './swellPalette';
 import type { SwellPulse } from '../data/types';
 
 const SURFACE_VERTEX = /* glsl */ `
@@ -587,8 +588,8 @@ export function GlobeSphere({ radius, pulse, offsetHours, octaves = 5 }: GlobeSp
       uOceanDeep: { value: new THREE.Color('#0a1c33') },
       uOceanMid: { value: new THREE.Color('#356da4') },
       uOceanBright: { value: new THREE.Color('#e6fbff').multiplyScalar(1.55) },
-      uSwellWeak: { value: new THREE.Color('#8fd6f0') },
-      uSwellStrong: { value: new THREE.Color('#a855f7') },
+      uSwellWeak: { value: new THREE.Color(SWELL_WEAK) },
+      uSwellStrong: { value: new THREE.Color(SWELL_STRONG) },
       uScatterColor: { value: new THREE.Color('#5aa8cc') },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
