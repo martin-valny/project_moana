@@ -31,15 +31,41 @@ export function HelenaPath({ pulse, radius, currentPoint, onSelect }: HelenaPath
 
   const { trailPoints, trailColors } = useMemo(() => {
     const n = pulse.path.length;
-    const points: THREE.Vector3[] = [];
-    const colors: THREE.Color[] = [];
 
-    pulse.path.forEach((p, i) => {
+    // The raw waypoints (data/helena.ts) are ~6h apart and only 20 in
+    // number — rendered as a straight-segment polyline through them
+    // directly, the path visibly kinks at each waypoint, most noticeably
+    // near the current marker. CatmullRomCurve3 passes through every
+    // waypoint exactly (so nothing about the underlying path data changes)
+    // but interpolates a smooth curve between them; 'centripetal'
+    // parameterization avoids the loop/overshoot artifacts chordal or
+    // uniform Catmull-Rom can produce when waypoint spacing is uneven.
+    const controlPoints = pulse.path.map((p, i) => {
       const bow = Math.sin((i / (n - 1)) * Math.PI) * 0.045; // rises mid-path, settles at the ends
       const lift = radius * (1.006 + bow);
-      points.push(latLonToVector3(p.lat, p.lon, lift));
+      return latLonToVector3(p.lat, p.lon, lift);
+    });
+    const waypointColors = pulse.path.map((p) => {
       const e = normalizeEnergy(p.energy);
-      colors.push(DEEP.clone().lerp(BRIGHT, 0.25 + e * 0.6));
+      return DEEP.clone().lerp(BRIGHT, 0.25 + e * 0.6);
+    });
+
+    const curve = new THREE.CatmullRomCurve3(controlPoints, false, 'centripetal');
+    const divisions = Math.max(120, (n - 1) * 8);
+    const points = curve.getPoints(divisions);
+
+    // CatmullRomCurve3.getPoint(t) maps t uniformly by waypoint index
+    // (t=0 -> waypoint 0, t=1 -> waypoint n-1) regardless of curve type, so
+    // sample k's fractional waypoint index is just k/divisions * (n-1) —
+    // used here to interpolate the same per-waypoint energy colour the
+    // straight-segment version used, just at curve resolution instead of
+    // waypoint resolution.
+    const colors = points.map((_, k) => {
+      const floatIdx = (k / divisions) * (n - 1);
+      const lo = Math.floor(floatIdx);
+      const hi = Math.min(lo + 1, n - 1);
+      const frac = floatIdx - lo;
+      return waypointColors[lo].clone().lerp(waypointColors[hi], frac);
     });
 
     return { trailPoints: points, trailColors: colors };
