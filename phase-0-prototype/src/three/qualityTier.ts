@@ -24,9 +24,16 @@ export function detectQualityTier(): QualitySettings {
   const cores = navigator.hardwareConcurrency ?? 4;
   const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 8;
   const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 
-  if (prefersReducedMotion || cores <= 2 || memory <= 2) return SETTINGS.low;
+  // Deliberately NOT keyed on prefers-reduced-motion. That preference is
+  // about vestibular comfort — it should stop things *moving* (which it
+  // does: Globe.tsx disables autorotate on it), not degrade image quality.
+  // Conflating the two meant anyone with reduced-motion set got a
+  // 2-octave globe, and it also silently mislead this project's own
+  // tooling: every screenshot/test script sets reducedMotion for
+  // determinism, so all of them had been rendering the low tier rather
+  // than what a typical user actually sees.
+  if (cores <= 2 || memory <= 2) return SETTINGS.low;
   if (isMobile && (cores <= 4 || memory <= 4)) return SETTINGS.mid;
   return SETTINGS.high;
 }

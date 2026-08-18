@@ -577,6 +577,92 @@ disk — the user didn't provide one as a file this round. `public/textures/`
 is proof this sandbox can now persist and use a real image file if a
 future round gets one.
 
+## Round 8: measuring the reference, and three tooling/quality bugs
+
+After round 7 the user looked again: "better but still doesn't look like
+this." Round 8 stopped working from a prose description of the reference
+and started measuring it.
+
+**Composition — the big one.** Measured on the reference image: the globe
+spans **~74% of frame width**, with clear black space past both limbs,
+cropped only top and bottom. Round 4's `FillFrameCamera` had it at ~97% —
+edge to edge. That is not a planet, it's a close-up of a patch of ocean;
+at that zoom you see roughly a 60° arc, so whichever landmass happens to
+sit near the camera axis fills the screen. Now `DISC_COVERAGE = 0.74` in
+`Globe.tsx`. FOV stays 8° (telephoto is what gives a near-full hemisphere
+with little perspective distortion — the reference has that too); only the
+camera distance changes.
+
+Note for the record: **round 6 rejected the external fix pack's framing
+complaint.** Its description ("small, centered, marble in space") genuinely
+didn't match what was rendering — but its instinct that the framing was
+wrong was correct, and dismissing the claim because the description was
+wrong cost two rounds. A bad description of a real problem is still a real
+problem.
+
+**Bug 1 — `shot.mjs` was non-deterministic and never showed the opening
+view.** It was the only one of the four scripts not setting
+`reducedMotion`, so idle auto-rotation ran throughout — and a single
+screenshot here takes tens of seconds of wall-clock time under
+software-rendered WebGL, so the globe spun a long way before the shot was
+taken. Every tuning screenshot landed on an arbitrary longitude. Several
+rounds of "why is a huge continent in the middle of the frame?" were partly
+this artifact rather than the framing itself.
+
+**Bug 2 — `prefers-reduced-motion` silently forced the LOW quality tier.**
+`qualityTier.ts` read `if (prefersReducedMotion || cores <= 2 || memory <=
+2) return SETTINGS.low`, conflating a vestibular-comfort preference with
+device capability. Two real consequences: anyone with reduced-motion set
+got a 2-octave globe instead of 5 for no reason (the right response to that
+preference is to stop *motion*, which `Globe.tsx` does separately), and
+since every screenshot/test script sets `reducedMotion` for determinism,
+**all automated visual checking in this project had been rendering the low
+tier**. Round 7's "raise the octave cap to the tier's real budget" fix was
+invisible in its own verification screenshots because of this. Now keyed on
+hardware only.
+
+**Not a bug, but verified rather than assumed.** Screenshots kept showing a
+big landmass near the centre of a view aimed at 24°N/−48°W — open ocean —
+which looked like a possible repeat of round 4's 180°-longitude mask bug.
+Checked two ways rather than by eye: sampled `earth-water.png` at eight
+known land/ocean coordinates (8/8 correct), then built a temporary debug
+version with land tinted flat red and compared against computed
+projections. Greenland projected to screen (258,108) and rendered there;
+Helena's marker (262,185); the Amazon (210,336) — all matching. **The
+camera and mapping are correct; the mass is North and South America and
+the earlier visual reading of it was simply wrong.** Debug build reverted
+immediately. Worth recording: eyeballing continent shapes on a
+partially-lit sphere has now produced one false alarm as well as one true
+find (round 4), so this project should reach for the numeric check first.
+
+**Visual changes** (all `GlobeSphere.tsx` unless noted): land lifted out of
+the black-hole state round 7 over-corrected into, with a gentler luminance
+curve so real terrain texture reads; ribbon ramps widened, since the
+reference's flow is translucent feathered veil rather than painted streak
+and *ramp width is what softens an edge* — the noise shape was never the
+problem; palette desaturated toward the reference's steel blue and muted
+olive rather than saturated royal blue and vivid teal; lit floor raised
+(the reference has essentially no dark side); tonal range rebalanced toward
+deeper water carrying more delicate highlights. In `Globe.tsx`, round 7's
+colour-grade saturation cut 0.18 → 0.05 — a global saturation boost
+*multiplies* what the shader already produced, so it was compounding with
+the palette rather than grading it.
+
+Two overshoots caught within the round rather than shipped: an atmosphere
+pass at shell 1.085 / alpha 0.45 produced a distinct teal **ring** with its
+own visible outer edge (at whole-disc framing, an 8.5%-of-radius shell is a
+large object in frame, not a haze), and the first teal pass produced vivid
+emerald blotches across half the ocean once round 7's blend bug was fixed
+and the bands were softened.
+
+**Still not matched, plainly:** the reference is a polished render, very
+likely with real current data and volumetric atmosphere behind it. This is
+much closer in composition, tonality and colour than any previous round,
+but a real-time procedural fBm shader will not land on it exactly. The
+remaining gap is mostly filament fineness and the photographic quality of
+the atmosphere, and closing it further needs the user pointing at specific
+differences rather than more self-directed tuning.
+
 ## Build bugs worth knowing about (fixed, but instructive)
 
 - **Round 1 (particle field, since replaced):** the point-size formula's

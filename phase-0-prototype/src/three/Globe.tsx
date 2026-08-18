@@ -23,17 +23,28 @@ const INITIAL_VIEW = latLonToVector3(24, -48, 8).toArray() as [number, number, n
 const FOV = 8;
 
 /**
- * Pulls the camera in so the globe overflows the frame rather than sitting
- * inside it as a small object in a field of black — a large part of what
- * makes the reference read as "a planet you are close to."
+ * Frames the globe as a whole planet: the full disc across the *wider*
+ * screen axis with real black margin either side, overflowing only the
+ * narrower axis.
  *
- * The needed angular diameter is set by whichever screen axis is *wider* in
- * angle, so the sphere covers both; a small factor over that gives the
- * overflow. Recomputed on resize, so one rule handles desktop landscape and
- * phone portrait without separate breakpoints. OrbitControls picks the new
- * position up on its next update (it derives its spherical state from
- * camera.position each frame), so no explicit re-sync is needed.
+ * Round 8: this factor was 0.97, which made the sphere span ~100% of the
+ * frame width — a close-up of a patch of ocean, not a planet. Measured
+ * against the reference image directly (sphere spans ~74% of frame width,
+ * black space clearly visible past both limbs, cropped only top/bottom)
+ * and matched to it. This is the single largest reason earlier rounds
+ * didn't read like the reference: at 0.97 the visible area is a ~60° arc
+ * of globe, so whatever landmass happens to be near the camera axis fills
+ * the screen; at 0.74 the same camera target shows the whole Atlantic
+ * hemisphere the way the reference does.
+ *
+ * FOV stays telephoto (8°) — that's what gives a near-full hemisphere with
+ * little perspective distortion, which the reference also shows. Only the
+ * distance changes. Recomputed on resize, so one rule handles desktop
+ * landscape and phone portrait without separate breakpoints. OrbitControls
+ * picks the new position up on its next update (it derives its spherical
+ * state from camera.position each frame), so no explicit re-sync needed.
  */
+const DISC_COVERAGE = 0.74;
 function FillFrameCamera({ radius }: { radius: number }) {
   const camera = useThree((s) => s.camera) as PerspectiveCamera;
   const size = useThree((s) => s.size);
@@ -43,7 +54,7 @@ function FillFrameCamera({ radius }: { radius: number }) {
     const vFov = (camera.fov * Math.PI) / 180;
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
 
-    const needed = Math.min(Math.max(vFov, hFov) * 0.97, Math.PI * 0.85);
+    const needed = Math.min(Math.max(vFov, hFov) * DISC_COVERAGE, Math.PI * 0.85);
     const distance = Math.max(radius * 1.35, radius / Math.sin(needed / 2));
 
     camera.position.setLength(distance);
@@ -110,9 +121,15 @@ export function Globe({ pulse, currentPoint, onSelectHelena }: GlobeProps) {
             which round 3 already found clamps HDR colours before Bloom ever
             sees them. Bloom still reads the pre-graded HDR scene colour, so
             this doesn't reintroduce that bug. */}
+        {/* Round 8b: saturation dialled back 0.18 -> 0.05. A global
+            saturation boost multiplies whatever the shader already
+            produced, so it was compounding with the palette's own
+            saturation rather than grading it — the ocean came out vivid
+            cyan and the green patches came out neon. The grade should be
+            the last few percent, not a second colour decision. */}
         <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
-        <HueSaturation saturation={0.18} />
-        <BrightnessContrast brightness={0.04} contrast={0.08} />
+        <HueSaturation saturation={0.05} />
+        <BrightnessContrast brightness={0.02} contrast={0.06} />
         <Noise opacity={0.018} premultiply />
         <Vignette eskil={false} offset={0.32} darkness={0.32} />
       </EffectComposer>

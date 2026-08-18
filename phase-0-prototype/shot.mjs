@@ -9,7 +9,15 @@ for (const [name, viewport] of [
   ['landscape', { width: 1600, height: 900 }],
   ['portrait', { width: 430, height: 932 }],
 ]) {
-  const page = await browser.newPage({ viewport });
+  // reducedMotion stops the idle auto-rotation, exactly as smoke-test.mjs and
+  // rotate-test.mjs already do. Without it these screenshots are NOT
+  // reproducible and do not show the app's actual opening composition: under
+  // this sandbox's software-rendered WebGL a single shot takes tens of
+  // seconds of wall-clock time, and autoRotate keeps spinning for all of it,
+  // so each run lands on an essentially arbitrary longitude. Several rounds of
+  // "why is there a huge continent in the middle of the frame?" were partly
+  // this artifact rather than the framing itself.
+  const page = await browser.newPage({ viewport, reducedMotion: 'reduce' });
   page.on('pageerror', (e) => errors.push(`${name}: ${e}`));
     // The webfont is fetched from fonts.googleapis.com, which this sandbox's
   // browser cannot reach (curl can; Chromium's CONNECT is reset by the

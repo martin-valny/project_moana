@@ -68,7 +68,12 @@ const SURFACE_FRAGMENT = /* glsl */ `
     // contour smooth rather than stair-stepped, same goal as the old
     // pre-blurred hand-generated mask it replaces (round 4).
     float m = 1.0 - texture2D(uLandMask, uv).r;
-    float stroke = smoothstep(0.30, 0.5, m) * smoothstep(0.70, 0.5, m) * 0.10;
+    // Round 8: 0.10 -> 0.20. The reference does show its coastlines — as a
+    // faint lighter contour tracing each continent, which is much of what
+    // keeps its land legible as land while still being very dark. Raising
+    // this is what lets the land base itself stay dark without the
+    // continents dissolving into featureless holes.
+    float stroke = smoothstep(0.30, 0.5, m) * smoothstep(0.70, 0.5, m) * 0.20;
 
     // Round 7: real Earth imagery (night-lights — continent structure and
     // city-light warmth, already close to this app's own dark navy palette)
@@ -81,17 +86,25 @@ const SURFACE_FRAGMENT = /* glsl */ `
     vec3 color;
 
     if (m > 0.5) {
-      // Land: a near-black navy base lifted by the real texture's own
-      // luminance (coastline structure, subtle relief, city-light flecks) —
-      // reads as landmass at a glance without becoming a legible daytime
-      // map (§5.1 — still coarse, still an impression, just no longer
-      // indistinguishable from the ocean beside it). A steep power curve
-      // (2.2, not 0.8) keeps ordinary mid-grey terrain luminance suppressed
-      // near-black — only genuinely bright source pixels (city lights, ice
-      // sheets) lift noticeably; the first attempt at this used a gentle
-      // curve and a raw satellite-photo look (bright, uniform tan) leaked
-      // through instead of staying inside this app's own dark palette.
-      color = uLandColor + vec3(0.5, 0.4, 0.3) * pow(nightLum, 2.2) * 0.9;
+      // Land: a dark slate-navy shape lifted slightly by the real texture's
+      // own luminance (coastline structure, subtle relief, city-light
+      // flecks). Round 7 went too far in both directions in one sitting —
+      // first a gentle pow(,0.8) leaked a bright uniform satellite-photo
+      // tan, then an over-corrected pow(,2.2) on a near-black base turned
+      // every continent into an opaque black hole punched through the
+      // planet. The reference does neither: its continents are clearly
+      // *darker* than the ocean but plainly part of the same lit sphere,
+      // in the same tonal family, with the atmosphere passing over them.
+      // Round 8 settles between the two — a base that is genuinely navy
+      // rather than black, a near-neutral (not warm/tan) lift, and a
+      // middling curve.
+      // A gentler curve and a stronger lift than round 8's first attempt:
+      // verified with a debug pass (land tinted flat red) that the
+      // continents really do occupy the middle of the opening view, so
+      // they cannot be a black void without dominating the whole frame.
+      // In the reference the continents carry visible terrain texture and
+      // sit only slightly darker than the unlit ocean around them.
+      color = uLandColor + vec3(0.42, 0.40, 0.37) * pow(nightLum, 1.35) * 1.15;
     } else {
       // --- Anisotropic noise domain -----------------------------------
       // The single most important line in this shader. Splitting the sample
@@ -124,9 +137,17 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // stay between: a threshold low enough to light the whole sphere
       // (flat blue ball), and a ridged/contour transform, which gives
       // thin wiry filaments rather than the reference's feathery wisps.
-      float band = smoothstep(-0.08, 0.42, n);
-      float crest = smoothstep(0.32, 0.64, n);
-      crest = pow(crest, 1.8);
+      //
+      // Round 8: both ramps widened (band 0.50 -> 0.85 wide, crest 0.32 ->
+      // 0.37 wide with a steeper power). The reference's ribbons are
+      // translucent, feathered veils — closer to high cirrus or aurora
+      // than to painted streaks — and the previous narrow ramps were what
+      // made these read as hard-edged saturated bands with abrupt
+      // shoulders. Widening the ramp is what softens an edge; the noise
+      // shape itself was never the problem.
+      float band = smoothstep(-0.35, 0.52, n);
+      float crest = smoothstep(0.34, 0.70, n);
+      crest = pow(crest, 2.0);
 
       // Teal shows up as broad regional patches, as in the reference —
       // low frequency and tied to position, not to the ribbon noise.
@@ -140,12 +161,28 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // what the first one set, structurally, regardless of tealPatch's
       // value. Fixed by blending mid/teal into ONE colour first, then
       // mixing that single result in once.
-      float tealPatch = smoothstep(0.05, 0.55, snoise(vPos * 1.7 + 17.0));
-      vec3 midOrTeal = mix(uOceanMid, uOceanTeal, tealPatch);
+      // Round 8b: once the blend bug above was fixed and the bands were
+      // softened, this went straight past "present" to "vivid emerald
+      // blotches over half the ocean". Threshold raised (smaller, rarer
+      // patches) and the blend itself capped at 0.6 so even a full patch
+      // only tints toward green rather than replacing the blue outright —
+      // in the reference the green is a regional tint within the water,
+      // never its own colour field.
+      float tealPatch = smoothstep(0.28, 0.78, snoise(vPos * 1.35 + 17.0));
+      vec3 midOrTeal = mix(uOceanMid, uOceanTeal, tealPatch * 0.6);
 
+      // Round 8: band weight 0.85 -> 0.72 so the ribbons stay translucent
+      // over the base rather than fully replacing it — part of what makes
+      // the reference's flow read as veils suspended over an ocean instead
+      // of opaque paint on top of one.
       vec3 oceanColor = uOceanDeep;
-      oceanColor = mix(oceanColor, midOrTeal, band * 0.85);
-      oceanColor = mix(oceanColor, uOceanBright, crest * 0.34);
+      // Round 8c: mid weight down, crest weight up. The reference holds a
+      // wide tonal range — genuinely deep navy water with delicate bright
+      // filaments laid over it — whereas pushing band coverage up had
+      // filled most of the ocean with a uniform mid-blue and flattened
+      // exactly that range. Less fill, more highlight.
+      oceanColor = mix(oceanColor, midOrTeal, band * 0.60);
+      oceanColor = mix(oceanColor, uOceanBright, crest * 0.38);
       // Real bathymetric/current texture as a subtle multiply on top of the
       // procedural ribbons — grounds them in actual geography instead of
       // being the sole source of ocean detail.
@@ -169,12 +206,14 @@ const SURFACE_FRAGMENT = /* glsl */ `
     // drags, which is the same flattening problem wearing a different hat.
     float lambert = dot(vWorldNormal, uLightDir);
     float lit = smoothstep(-0.6, 0.9, lambert);
-    // Round 7: widened from mix(0.62, 1.12, ...) — the reference reads as a
-    // bright, well-exposed "hero photograph," not a moody/dark abstraction;
-    // brightened the lit side more than the dark side so the directional
-    // read (round 5's actual fix) stays intact rather than just flattening
-    // upward.
-    color *= mix(0.68, 1.35, lit);
+    // Round 7 widened this from mix(0.62, 1.12, ...) — the reference reads
+    // as a bright, well-exposed "hero photograph," not a moody/dark
+    // abstraction. Round 8 raises the *floor* further (0.68 -> 0.86): in
+    // the reference essentially the whole disc is luminous, with only a
+    // gentle gradient across it — there is no genuinely dark side. Keeping
+    // the ceiling above the floor preserves round 5's directional read;
+    // this only stops the unlit half falling away into near-black.
+    color *= mix(0.80, 1.28, lit);
 
     // What used to carry the "sphere" read on its own is now just a
     // whisper: a near-imperceptible grazing-angle falloff, and a thin
@@ -183,7 +222,13 @@ const SURFACE_FRAGMENT = /* glsl */ `
     vec3 viewDir = normalize(-vViewPosition);
     float facing = clamp(dot(normalize(vViewNormal), viewDir), 0.0, 1.0);
     color *= mix(0.88, 1.0, smoothstep(0.0, 0.25, facing));
-    color += uScatterColor * pow(1.0 - facing, 4.0) * 0.2;
+    // Round 8: broader, stronger in-scattering toward the limb (power
+    // 4.0 -> 3.0, weight 0.2 -> 0.38). In the reference the planet's edge
+    // is its brightest part — a wide luminous band of atmosphere wrapping
+    // the disc, not a thin outline — and it passes over land and ocean
+    // alike, which is a large part of what unifies the two into one lit
+    // sphere rather than a textured ball with holes cut in it.
+    color += uScatterColor * pow(1.0 - facing, 3.0) * 0.28;
 
     gl_FragColor = vec4(color, 1.0);
   }
@@ -217,8 +262,17 @@ const ATMOSPHERE_FRAGMENT = /* glsl */ `
     // replaced it with world-space directional lighting. The reference
     // shows a genuinely prominent limb glow; broadened (lower power) and
     // brightened (higher peak alpha) to match.
+    //
+    // Round 8b: a first attempt at "broader" (shell 1.085, power 2.0,
+    // alpha 0.45) overshot into a distinct teal *ring* floating around the
+    // planet with its own visible outer edge — at whole-disc framing an
+    // 8.5%-of-radius shell is simply a large object in frame, not a haze.
+    // The reference's halo hugs the limb and fades out within a few
+    // percent of the radius, so: smaller shell, tighter falloff, lower
+    // peak. Brightness at the limb now comes mostly from the in-scattering
+    // term on the planet surface itself, which cannot ring by construction.
     float fresnel = pow(clamp(1.0 + facing, 0.0, 1.0), 2.6);
-    gl_FragColor = vec4(uColor, fresnel * 0.4);
+    gl_FragColor = vec4(uColor, fresnel * 0.30);
   }
 `;
 
@@ -299,13 +353,18 @@ export function GlobeSphere({ radius, lat, lon, headingDeg, energy01, octaves = 
       // the reference's gentle overall brightness gradient. Fixed, not
       // camera-relative (see the shading comment in SURFACE_FRAGMENT).
       uLightDir: { value: new THREE.Vector3(-0.4, 0.55, 0.5).normalize() },
-      uLandColor: { value: new THREE.Color('#0a1524') },
+      // Round 8 palette pass, measured against the reference rather than
+      // nudged: its base ocean is a visible navy (not near-black), its
+      // ribbons are a *desaturated* steel blue rather than a saturated
+      // royal blue, and its green is a muted olive-emerald, not a vivid
+      // teal. Saturation was as much of the mismatch as brightness was.
+      uLandColor: { value: new THREE.Color('#16293f') },
       uCoastColor: { value: new THREE.Color('#9fb4c6') },
-      uOceanDeep: { value: new THREE.Color('#071528') },
-      uOceanMid: { value: new THREE.Color('#1a5aa4') },
-      uOceanBright: { value: new THREE.Color('#e6fbff').multiplyScalar(1.9) },
-      uOceanTeal: { value: new THREE.Color('#1d6b62') },
-      uScatterColor: { value: new THREE.Color('#4d9fc4') },
+      uOceanDeep: { value: new THREE.Color('#0a1c33') },
+      uOceanMid: { value: new THREE.Color('#356da4') },
+      uOceanBright: { value: new THREE.Color('#e6fbff').multiplyScalar(1.55) },
+      uOceanTeal: { value: new THREE.Color('#3c6a52') },
+      uScatterColor: { value: new THREE.Color('#5aa8cc') },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [landMask, nightTexture],
@@ -331,7 +390,7 @@ export function GlobeSphere({ radius, lat, lon, headingDeg, energy01, octaves = 
         <sphereGeometry args={[radius, 128, 128]} />
         <shaderMaterial vertexShader={SURFACE_VERTEX} fragmentShader={SURFACE_FRAGMENT} uniforms={surfaceUniforms} />
       </mesh>
-      <mesh scale={1.045}>
+      <mesh scale={1.05}>
         <sphereGeometry args={[radius, 64, 64]} />
         <shaderMaterial
           vertexShader={ATMOSPHERE_VERTEX}

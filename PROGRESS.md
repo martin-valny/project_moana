@@ -17,15 +17,16 @@ product vision and rules; this file is the build/validation log against it.
 
 **Phase −1 is passed (decided 2026-08-17). Phase 0's visual prototype
 (`phase-0-prototype/`) has had five rounds of direct user feedback against a
-reference image, a sixth round reviewing an external "visual fix pack," and
-a seventh round (§"Round 7" below) that replaced flat procedural colour
-with real Earth texture data after the user posted the actual reference
-image directly and rejected a first plan draft as "another round of
-expensive iteration." It is functionally complete and automatically
-verified, but has not been shown to the user for a fresh open-ended look
-since round 7 landed, and still needs the plan's actual falsifiable gate —
-five non-surfers timed on a physical phone — which no agent session can run
-itself.**
+reference image, a sixth round reviewing an external "visual fix pack," a
+seventh that replaced flat procedural colour with real Earth texture data,
+and an eighth (§"Round 8" below) that *measured* the reference rather than
+describing it — correcting a large framing error (the globe was rendered at
+~97% of frame width where the reference is ~74%) and fixing three bugs,
+two of which meant earlier rounds' screenshots were not showing what a user
+would actually see. It is functionally complete and automatically verified,
+but has not been shown to the user since round 8 landed, and still needs the
+plan's actual falsifiable gate — five non-surfers timed on a physical phone
+— which no agent session can run itself.**
 
 **If you're picking this up cold, read in this order:** (1) this "Status"
 section, (2) "What's next" near the bottom for the immediate action, (3) the
@@ -564,7 +565,104 @@ this round didn't block on asking for it). If a future round wants a
 tighter comparison, ask the user for the image as a file this time —
 `public/textures/` is proof this sandbox can actually persist and use one.
 
-### Verified, and how (current as of round 7, HEAD `349f4fb`)
+### Round 8: measuring the reference instead of describing it — and three tooling/quality bugs
+
+The user posted the reference image again after round 7 and said it was
+"better but still doesn't look like this." Round 8 stopped describing the
+reference in prose and started **measuring** it, which turned up one large
+compositional error and three bugs — two of which meant the previous
+rounds' screenshots weren't showing what a user would actually see.
+
+**The composition was wrong, and by a measurable amount.** In the
+reference the globe spans ~74% of the frame width with clear black space
+past both limbs, cropped only top and bottom — a whole planet. Round 4's
+`FillFrameCamera` was set so the sphere spanned ~97% of frame width. That
+is not a planet, it is a close-up of a patch of ocean: at that zoom the
+visible area is roughly a 60° arc, so whatever landmass sits near the
+camera axis fills the screen. Fixed by extracting the constant as
+`DISC_COVERAGE = 0.74` in `Globe.tsx`. FOV stays telephoto (8°), which is
+what gives the near-full hemisphere with little perspective distortion
+that the reference also shows; only the distance changes.
+
+Worth recording honestly: **round 6 rejected the external fix pack's
+framing complaint**, on the grounds that the code deliberately made the
+globe overflow the frame and the fix pack's description of it ("small,
+centered, marble in space") didn't match what was rendering. The
+description really didn't match — but the underlying instinct that the
+framing was wrong was right, and dismissing the claim on the strength of
+the mismatched description meant two more rounds passed before it was
+caught. A wrong description of a real problem is still a real problem.
+
+**Bug: `shot.mjs` was not deterministic and never showed the opening
+composition.** It was the only script of the four that didn't set
+`reducedMotion`, so idle auto-rotation kept running — and under this
+sandbox's software-rendered WebGL a single screenshot takes tens of
+seconds of wall-clock time, during which the globe spins a long way. Every
+tuning screenshot therefore landed on an essentially arbitrary longitude.
+Several rounds of "why is there a huge continent in the middle of frame?"
+were partly this artifact. Fixed by setting `reducedMotion: 'reduce'`, as
+the other three scripts already did.
+
+**Bug: `prefers-reduced-motion` silently forced the LOW quality tier.**
+`qualityTier.ts` had `if (prefersReducedMotion || cores <= 2 || ...) return
+SETTINGS.low`, which conflates a vestibular-comfort preference with device
+capability. Two consequences, both real: any user with reduced-motion set
+got a 2-octave globe instead of 5 for no reason (the correct response to
+that preference is to stop the motion, which `Globe.tsx` already does
+separately), and — because *every* screenshot and test script sets
+`reducedMotion` for determinism — all of this project's automated visual
+checking had been rendering the low tier rather than what a typical user
+sees. Round 7's "octave cap raised to the tier's real budget" fix was
+therefore invisible in its own verification screenshots. Fixed by keying
+the tier on hardware only.
+
+**Verified rather than assumed: the camera and texture mapping are
+correct.** Screenshots kept showing a large landmass near the centre of a
+view aimed at 24°N/−48°W, which is open ocean (Sargasso Sea), so this
+looked like a possible repeat of round 4's 180°-offset mask bug. Checked
+two ways instead of by eye: sampling `earth-water.png` at eight known
+land/ocean coordinates (8/8 correct), and computing the expected screen
+projection of known landmarks against a temporary debug build with land
+tinted flat red. Greenland projected to (258,108) and rendered there;
+Helena's marker to (262,185) and rendered there; the Amazon to (210,336)
+and rendered there. **No bug — the mass is North and South America,
+correctly placed; the earlier visual reading of it was simply wrong.** The
+debug build was reverted immediately. Recording this because "the render
+looks geographically implausible" recurs in this project and eyeballing
+continent shapes on a partially-lit sphere has now produced a false alarm
+as well as a true one (round 4).
+
+**Visual changes**, all in `GlobeSphere.tsx` unless noted: land lifted out
+of the near-black hole round 7 over-corrected it into, with a gentler
+luminance curve so real terrain texture shows; ribbon ramps widened
+(the reference's flow reads as translucent feathered veils, closer to
+cirrus or aurora than to painted streaks — widening a ramp is what softens
+an edge, the noise shape was never the problem); palette desaturated
+toward the reference's steel blue and muted olive-green rather than
+saturated royal blue and vivid teal; lit floor raised (the reference has
+essentially no dark side); tonal range rebalanced toward deeper water with
+more delicate highlights. In `Globe.tsx` the round-7 colour grade's
+saturation was cut 0.18 → 0.05: a global saturation boost *multiplies*
+what the shader already produced, so it was compounding with the palette's
+own saturation rather than grading it.
+
+Two overshoots were caught and corrected within the round rather than
+shipped: the first atmosphere pass (shell 1.085, alpha 0.45) produced a
+distinct teal *ring* with its own visible outer edge — at whole-disc
+framing an 8.5%-of-radius shell is a large object in frame, not a haze —
+and the first teal pass produced vivid emerald blotches over half the
+ocean once the blend bug from round 7 was fixed and the bands softened.
+
+**Still not matched, honestly:** the reference is a polished render (very
+likely with real current data and volumetric atmosphere behind it). This
+is closer in composition, tonality and colour than any previous round, but
+a real-time procedural fBm shader is not going to land on it exactly, and
+the remaining gap is mostly in the fineness of the filament detail and the
+photographic quality of the atmosphere. Further convergence needs the
+user's eye on specific remaining differences, not more self-directed
+tuning.
+
+### Verified, and how (current as of round 8, HEAD `927b0b7`+)
 
 No physical phone or human testers were available in this session, so
 verification stopped at what automation can actually confirm. Four scripts
@@ -581,15 +679,16 @@ at it, all worth re-running after any further shader/UI change:
   `["helena-phase0"]`, jumps the timeline to "3 Days" and confirms Helena's
   rendered position actually moves, opens the "About the data" sheet via
   the wordmark and confirms its content, confirms **no** standalone
-  attribution text sits in the main view, zero console/page errors. Passed
-  both viewports historically; **the Follow Swell click step has now timed
-  out at its hardcoded 8000ms in two separate sessions (rounds 6 and 7)** —
-  still session/environment-speed-related, not a real defect (round 6's
-  diagnosis: the click succeeds at ~10.2s under a longer timeout, and the
-  same timeout reproduces on unmodified code), but recurring across
-  sessions is worth noting as a pattern, not just a one-off. If it recurs a
-  third time, just bump the timeout in `smoke-test.mjs:45` — no further
-  diagnosis needed, round 6 already did it.
+  attribution text sits in the main view, zero console/page errors.
+  **Passing both viewports at HEAD.** The Follow Swell click step timed out
+  at its hardcoded 8000ms in three separate sessions (rounds 6, 7, 8) —
+  never a real defect: round 6 established that the click succeeds at
+  ~10.2s under a longer ceiling and that the timeout reproduced on
+  unmodified code. Playwright waits for a rendered frame before a click is
+  actionable, and frames are slow here under software WebGL, so 8000ms was
+  measuring this environment's frame rate rather than the app. Round 8
+  raised it to a named `CLICK_TIMEOUT = 30000`; the suite then passed both
+  viewports cleanly for the first time since round 5.
 - **`?e2e=1` query param**: the app publishes Helena's projected marker
   screen position on `window.__moanaMarker` when present. Added in round 4
   because sweeping screen coordinates to find a moving 3D marker is far too
