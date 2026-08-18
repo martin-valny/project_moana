@@ -196,3 +196,22 @@ export function angularFrontDistanceRad(periodS: number, spawnOffsetHours: numbe
   const distanceKm = groupVelocityKmH * elapsedHours;
   return distanceKm / EARTH_RADIUS_KM;
 }
+
+const SPAWN_RAMP_HOURS = 4;
+
+/**
+ * How much of a source's full energy should render at `forecastHours`,
+ * given it started generating at `spawnOffsetHours`. Round 12: the
+ * timeline scrubber's range already reaches back before every invented
+ * source's own spawn time (so a user can scrub into the genuine past, not
+ * just forward), and `angularFrontDistanceRad` already clamps to a 0
+ * radius before spawn — but energy itself was never gated the same way,
+ * so a source rendered as a small fixed dot at its own origin regardless
+ * of whether it had started yet. This fades a source in linearly over its
+ * first `SPAWN_RAMP_HOURS`, so scrubbing to before it exists shows
+ * genuinely nothing.
+ */
+export function spawnRamp01(spawnOffsetHours: number, forecastHours: number): number {
+  const t = (forecastHours - spawnOffsetHours) / SPAWN_RAMP_HOURS;
+  return Math.min(1, Math.max(0, t));
+}

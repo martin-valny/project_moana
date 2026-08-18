@@ -3,7 +3,7 @@ import { useFrame, useLoader } from '@react-three/fiber';
 import * as THREE from 'three';
 import { SIMPLEX_NOISE_GLSL } from './shaders/noise';
 import { FBM_GLSL } from './shaders/fbm';
-import { MAX_SWELL_SOURCES, angularFrontDistanceRad, buildSwellSources } from '../data/swellSources';
+import { MAX_SWELL_SOURCES, angularFrontDistanceRad, buildSwellSources, spawnRamp01 } from '../data/swellSources';
 import { normalizeEnergy } from '../data/interpolate';
 import { SWELL_WEAK, SWELL_STRONG } from './swellPalette';
 import type { SwellPulse } from '../data/types';
@@ -183,7 +183,22 @@ const SURFACE_FRAGMENT = /* glsl */ `
         float poleFade = smoothstep(0.0, 0.26, d);
         float spread = mix(1.0, spreadRaw, poleFade);
 
-        float arrived = 1.0 - smoothstep(uSourceFront[i] - FRONT_WIDTH, uSourceFront[i] + FRONT_WIDTH, d);
+        // Round 12: leadingEdge is the same crisp cutoff as before — real
+        // information ("the swell hasn't reached here yet") that should
+        // stay sharp. What's new is trailFade, dimming the long-passed
+        // part of the wake back toward the source's own origin. Physically
+        // the previous flat plateau behind the edge was defensible (these
+        // are modelled as ongoing storms, still generating, not a single
+        // pulse), but it meant a static frame carried no visual cue that
+        // the water near an origin is OLDER than the water at the growing
+        // edge — nothing read as in motion without scrubbing the timeline.
+        // Purely a legibility device, same spirit as round 11's fade on
+        // Helena's own path: brightest and sharpest at the current edge,
+        // gently receding behind it, floor at 0.3 so the wake recedes
+        // rather than disappearing (it is still there, just older).
+        float leadingEdge = 1.0 - smoothstep(uSourceFront[i] - FRONT_WIDTH, uSourceFront[i] + FRONT_WIDTH, d);
+        float trailFade = smoothstep(0.0, max(uSourceFront[i] * 0.75, FRONT_WIDTH), d);
+        float arrived = leadingEdge * mix(0.3, 1.0, trailFade);
         float falloff = 1.0 / (1.0 + d * 1.3);
         float w = spread * arrived * falloff * uSourceEnergy[i];
 
@@ -558,7 +573,8 @@ export function GlobeSphere({ radius, pulse, offsetHours, octaves = 5 }: GlobeSp
         continue;
       }
       frontArray.push(angularFrontDistanceRad(s.periodS, s.spawnOffsetHours, offsetHours));
-      energyArray.push(normalizeEnergy(s.heightM * s.heightM * s.periodS));
+      const fullEnergy = normalizeEnergy(s.heightM * s.heightM * s.periodS);
+      energyArray.push(fullEnergy * spawnRamp01(s.spawnOffsetHours, offsetHours));
     }
     return { frontArray, energyArray };
   }, [sources, offsetHours]);

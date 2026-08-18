@@ -9,7 +9,17 @@ import { buildHelenaPulse, HELENA_MAX_OFFSET_HOURS, HELENA_MIN_OFFSET_HOURS, sho
 import { interpolatePulseAt } from './data/interpolate';
 import './App.css';
 
+// Round 12: the track has always spanned HELENA_MIN_OFFSET_HOURS to
+// HELENA_MAX_OFFSET_HOURS (it's the drag range passed to Timeline below),
+// but every labelled stop sat at 0 or later — nothing on screen hinted a
+// user could drag left of "Now" into genuine history at all. Tied to the
+// real constant, not a hardcoded number, so it can't drift out of range if
+// Helena's own path data ever changes.
 const STOPS = [
+  // Short deliberately: at only 18h before "Now" on a track spanning 114h
+  // total, the two stops sit close together — "18h Ago" collided visibly
+  // with "Now"'s label in testing.
+  { label: `-${Math.abs(HELENA_MIN_OFFSET_HOURS)}h`, hours: HELENA_MIN_OFFSET_HOURS },
   { label: 'Now', hours: 0 },
   { label: 'Tomorrow', hours: 24 },
   { label: '3 Days', hours: 72 },
