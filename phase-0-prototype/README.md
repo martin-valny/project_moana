@@ -10,9 +10,13 @@ Round 1 used a GPU particle field. Round 2 replaced it with a domain-warped
 fractal-noise shader. Round 3 fixed missing curvature shading, a dead bloom
 pipeline, and several CSS bugs. Round 4 was the first pass with the actual
 reference image in hand and fixed structural issues (anisotropic ribbons,
-framing, a real land-mask bug). Round 5 (current) replaced the shading model
+framing, a real land-mask bug). Round 5 replaced the shading model
 itself — the globe had curvature but no actual light, which read as "obvious"
-shading rather than a lit 3D object. See "Round 5" below.
+shading rather than a lit 3D object. Round 6 (current) wasn't new user
+feedback — it evaluated an external "visual fix pack" against the real
+build, rejected 4 of its 5 claims as stale/inapplicable, and fixed the one
+real issue it found (a straight-segment swell path, now a true spline). See
+"Round 5" and "Round 6" below.
 
 ## Run it
 
@@ -379,6 +383,92 @@ The same screen quadrants swap from bright to dark between the two shots
 (top-left 55→19, bottom-left 69→19) — confirming the light is tied to the
 globe's geography, not the screen. A camera-relative bug would have kept
 these numbers roughly constant across both shots.
+
+## Round 6: evaluating an external "visual fix pack," not new user feedback
+
+Unlike rounds 2-5, the input this time wasn't the user reacting to a fresh
+screenshot — it was a pasted third-party document, a vanilla Three.js "fix
+pack" claiming 5 problems: a flat non-flowing ocean texture, a small
+centered "marble in space" globe, hard white vector-map coastline strokes,
+no atmosphere glow with an underexposed/flat look (recommending
+`THREE.ACESFilmicToneMapping`), and a swell path built from a straight line
+stitched to a separate arc.
+
+The critique was checked against the actual code and fresh
+`shot.mjs`/`rotate-test.mjs` screenshots at HEAD rather than applied on
+trust — worth doing explicitly here because the fix pack assumed vanilla
+Three.js (`scene.add`, `renderer.toneMapping`, a 2D canvas overlay) against
+an app that's React Three Fiber throughout, so nothing in it was a drop-in
+patch regardless of whether the diagnosis was right, and several of the
+claims read as generic rather than specific to this codebase.
+
+**Outcome: 4 of 5 claims rejected as describing a stale or nonexistent
+state; 1 had a real kernel of truth and was fixed.**
+
+- **Ocean texture, framing, coastlines — all rejected outright.** The
+  double-warp anisotropic fBm (rounds 2/4), the 8° telephoto
+  `FillFrameCamera` (round 4), and the near-invisible land + soft
+  derivative-stroke coastline (round 3) already do what the fix pack asked
+  for. Screenshots confirm it: clear marbled ribbons, the globe bleeding off
+  all four edges, a soft low-contrast coastline — none of the described
+  problems are present.
+- **Atmosphere/exposure — rejected, and the proposed fix would have
+  regressed a real bug fix.** An atmosphere rim shell already exists, and
+  screenshots show genuine directional lighting (round 5), not a flat cold
+  vignette. The fix pack's specific remedy — switch to
+  `THREE.ACESFilmicToneMapping` — would have reintroduced round 3's bloom
+  bug verbatim: `Globe.tsx` sets `toneMapping: NoToneMapping` *because*
+  the default tone mapping was clamping HDR peak colours (`uOceanBright`,
+  `HelenaPath`'s `BRIGHT`, both deliberately authored above 1.0) before
+  bloom could ever see them. No exposure change made.
+- **Swell path — the one real fix.** The fix pack's specific claim (a
+  straight segment stitched to a separately-drawn arc, to be replaced with
+  a 2D canvas `quadraticCurveTo` overlay) doesn't match this app's
+  architecture at all — there is no 2D canvas overlay anywhere in it, and a
+  screen-space curve couldn't track the sphere's rotation/occlusion
+  correctly regardless. But reading `HelenaPath.tsx` directly found a real,
+  if differently-shaped, defect: the path was a drei `<Line>` connecting the
+  20 raw waypoints from `data/helena.ts` with straight segments — no spline
+  smoothing at all. With waypoints ~6h apart, that's a genuine polyline, not
+  a curve.
+
+  **Fix:** the same 20 waypoints (unchanged) are now resampled through a
+  `THREE.CatmullRomCurve3` (`centripetal` type, to avoid the loop/overshoot
+  artifacts that chordal or uniform parameterization can produce when
+  waypoint spacing is uneven) before being handed to `<Line>`. Colour
+  interpolation needed care: `CatmullRomCurve3.getPoint(t)` maps `t`
+  uniformly by *waypoint index* regardless of curve type (`t=0` is waypoint
+  0, `t=1` is the last waypoint, segments are evenly spaced in `t` by index
+  — the curve type only changes the tangent shape within each segment, not
+  which `t` range a segment occupies), so each sampled curve point's
+  fractional waypoint index (`k/divisions * (n-1)`) could be used to
+  linearly interpolate between the same two waypoints' existing
+  energy-based colours the straight-segment version used per-vertex —
+  keeping the cobalt→bright gradient smooth at curve resolution instead of
+  only at waypoint resolution. Glow, marker, the `?e2e=1` hook, and click
+  handling are untouched.
+
+  Before/after screenshots at matching camera angles (`rotate-test.mjs`)
+  confirm the curve is genuinely smoother — no vertex is visible on close
+  crop — but the visual delta is subtle at normal zoom: most of Helena's
+  visible arc runs through waypoints that are already close to a
+  great-circle line over their short 6h hops, so this is a real correctness
+  fix more than a dramatic visual one.
+
+**An unrelated issue surfaced during verification, not caused by the fix
+above:** `smoke-test.mjs`'s Follow-Swell click step timed out at its
+hardcoded `{ timeout: 8000 }` in this sandbox session. Bisected with `git
+stash` — reproduces identically on the unmodified pre-round-6 code, so it
+predates this change. A one-off diagnostic script with a 30s timeout showed
+the click **does** succeed, at ~10.2s — this sandbox's software-rendered
+WebGL (see "Environment constraints" elsewhere in this project's docs) is
+apparently too loaded in this session for an 8s actionability window once
+the panel's 0.6s CSS slide-in animation and the continuous
+shader/bloom/autorotate render loop are competing for the main thread.
+Left as a flagged, not-yet-fixed item rather than bumping the timeout —
+it's a session/environment-speed question outside this review's scope, and
+one confirmed reproduction under a 30s ceiling isn't enough to be sure
+8000ms is wrong everywhere versus just slow here.
 
 ## Build bugs worth knowing about (fixed, but instructive)
 

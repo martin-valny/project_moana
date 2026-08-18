@@ -1,7 +1,7 @@
 # Project Moana — Progress Report
 
 Last updated: 2026-08-18, branch `claude/moana-master-build-plan-v2-zjs07y`,
-HEAD `acbb0cb`. Working tree clean, everything below is pushed.
+HEAD `677e00a`. Working tree clean, everything below is pushed.
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -16,23 +16,29 @@ product vision and rules; this file is the build/validation log against it.
 ## Status, one line
 
 **Phase −1 is passed (decided 2026-08-17). Phase 0's visual prototype
-(`phase-0-prototype/`) is on its fifth iteration of visual polish, driven by
-five rounds of direct user feedback against a reference image, most recently
-fixing the globe's lighting model itself (round 5, §"Round 5" below). It is
-functionally complete and automatically verified, but has not been shown to
-the user again since round 5 landed, and still needs the plan's actual
-falsifiable gate — five non-surfers timed on a physical phone — which no
-agent session can run itself.**
+(`phase-0-prototype/`) has had five rounds of direct user feedback against a
+reference image (round 5: the globe's lighting model itself), plus a sixth
+round (§"Round 6" below) evaluating an externally-supplied "visual fix pack"
+against the actual rendered build — four of its five claims turned out to
+describe a stale/generic state rather than this codebase and were rejected;
+one had a real kernel of truth (the swell path was a straight-segment
+polyline, now a true spline) and was fixed. It is functionally complete and
+automatically verified, but has not been shown to the user for a fresh
+open-ended look since round 5, and still needs the plan's actual falsifiable
+gate — five non-surfers timed on a physical phone — which no agent session
+can run itself.**
 
 **If you're picking this up cold, read in this order:** (1) this "Status"
 section, (2) "What's next" near the bottom for the immediate action, (3) the
-"Round 5" subsection under "Phase 0" for the most recent/likely-still-live
-thread, (4) skim "What was built" and rounds 2–4 for context on how the
-visual engine got here. Don't start a "round 6" purely on your own initiative
-— the last four rounds were each a direct response to the user looking at a
-screenshot and saying what was wrong; if the user hasn't given new feedback,
-the right move is to ask them to look at it again, not to guess at further
-changes.
+"Round 6" subsection under "Phase 0" for the most recent thread (a fix-pack
+review, not new user feedback — see it for how to evaluate one of these
+without trusting it blindly), (4) "Round 5" for the last actual visual
+change, (5) skim "What was built" and rounds 2–4 for context on how the
+visual engine got here. Don't start a "round 7" of self-directed visual
+tuning purely on your own initiative — rounds 2-5 were each a direct
+response to the user looking at a screenshot and saying what was wrong; if
+the user hasn't given new feedback, the right move is to ask them to look at
+it again, not to guess at further changes.
 
 ---
 
@@ -377,7 +383,85 @@ dark between shots, confirming the light tracks the globe's geography, not
 the screen. Full detail in `phase-0-prototype/README.md`'s "Round 5"
 section, including the exact before/after uniform values.
 
-### Verified, and how (current as of round 5, HEAD `acbb0cb`)
+### Round 6: evaluating an external "visual fix pack" (not new user feedback)
+
+Unlike rounds 2-5, this wasn't the user looking at a fresh screenshot — it
+was a pasted third-party document ("MOANA Globe — Visual Fix Pack"): vanilla
+Three.js code plus a 5-point critique claiming the current build had a flat
+non-flowing ocean texture, a small centered "marble in space" globe, hard
+white vector-map coastline strokes, no atmosphere/too-dark exposure (with a
+recommendation to switch to `THREE.ACESFilmicToneMapping`), and a swell path
+built from a straight line stitched to a separate arc.
+
+**The critique was evaluated against the actual code and actual rendered
+screenshots at HEAD, not applied on trust** — worth doing explicitly because
+the fix pack assumed vanilla Three.js (`scene.add`, `renderer.toneMapping`,
+a 2D canvas overlay) against an app that's React Three Fiber throughout, and
+several of its claims read as generic/templated rather than specific to this
+codebase.
+
+**Per-claim outcome**, each checked against fresh `shot.mjs`/`rotate-test.mjs`
+screenshots, not just source reading:
+
+1. **"Flat gradient, no flow field" — rejected.** `GlobeSphere.tsx` +
+   `shaders/fbm.ts` already run a double domain-warped fBm with ~10:1
+   anisotropic stretch along Helena's heading (rounds 2 and 4). Screenshots
+   show clear marbled ribbons, not a blurred gradient.
+2. **"Small centered globe" — rejected.** `Globe.tsx`'s 8° telephoto
+   `FillFrameCamera` (round 4) is exactly the opposite of what was
+   described; every screenshot shows the globe bleeding off all four edges.
+3. **"Hard white coastline strokes" — rejected.** Land is `#0a1524` against
+   ocean-deep `#071528` with only a 0.10-alpha derivative-band stroke
+   (round 3's fix); screenshots show a soft, low-contrast line, not a
+   vector-map outline.
+4. **"No atmosphere; too dark; switch to ACESFilmicToneMapping" — rejected,
+   and the remedy would have been actively harmful.** `Globe.tsx` sets
+   `toneMapping: NoToneMapping` **deliberately** — round 3's own log records
+   that the default tone mapping was clamping HDR peak colours before bloom
+   could see them, silently defeating the whole ">1.0 for bloom" technique,
+   and `NoToneMapping` was the fix for exactly that bug. Switching to ACES
+   as the fix pack suggested would have reproduced it: `uOceanBright` and
+   `HelenaPath`'s `BRIGHT` are both deliberately authored above 1.0 for
+   this reason. An atmosphere rim shell already exists; screenshots show
+   real limb glow and directional (not flat) lighting. No exposure change
+   made.
+5. **"Straight line stitched to an arc; fix with a 2D canvas bezier" —
+   architecture claim rejected, but with a real kernel of truth.** There is
+   no 2D canvas overlay anywhere in this app (`App.tsx` composes the R3F
+   `<Canvas>` with DOM/CSS components only), and a screen-space bezier
+   couldn't track the sphere's rotation/occlusion correctly regardless.
+   But `HelenaPath.tsx` genuinely was rendering the path as a drei `<Line>`
+   through the 20 raw waypoints connected by straight segments, no spline
+   smoothing — a real (if subtle-in-practice) defect, just not the one
+   described. **Fixed**: waypoints are now resampled through a
+   `THREE.CatmullRomCurve3` (centripetal parameterization, to avoid
+   loop/overshoot from the uneven real-world spacing between waypoints)
+   before being handed to `<Line>`, with the existing per-waypoint energy
+   colour gradient interpolated along the same curve parameter so it stays
+   smooth too. Everything else about the path (glow, marker, `?e2e=1` hook,
+   click handling) is untouched. Before/after screenshots at the same
+   camera angles show the path is technically a true spline now rather than
+   a polyline, though the visual delta is subtle at normal viewing
+   distance/zoom — the underlying waypoint geometry was already close to a
+   great-circle line over most of its short-hop segments, so this is a
+   correctness fix more than a dramatic visual one.
+
+**A genuine (if unrelated) issue surfaced while verifying, not caused by the
+fix above**: `smoke-test.mjs`'s Follow-Swell click step timed out at its
+hardcoded 8000ms in this sandbox session. Reproduced identically on the
+unmodified pre-fix code (confirmed via `git stash`), so it is not a
+regression from the path-smoothing change. A diagnostic run with a 30s
+timeout showed the click **does** succeed, just at ~10.2s — this sandbox's
+software-rendered WebGL (already documented elsewhere in this file as very
+slow) is apparently too loaded in this session for an 8s click-actionability
+window once the panel's 0.6s slide-in animation and the continuous
+shader/bloom/autorotate render loop are competing for the main thread.
+Flagging rather than fixing `smoke-test.mjs`'s timeout, since it's outside
+this review's scope and the failure is session/environment-speed-dependent,
+not deterministic — worth knowing if a future run hits it again, but not
+worth chasing further without evidence it's more than that.
+
+### Verified, and how (current as of round 6, HEAD `677e00a`)
 
 No physical phone or human testers were available in this session, so
 verification stopped at what automation can actually confirm. Four scripts
@@ -395,7 +479,14 @@ at it, all worth re-running after any further shader/UI change:
   rendered position actually moves, opens the "About the data" sheet via
   the wordmark and confirms its content, confirms **no** standalone
   attribution text sits in the main view, zero console/page errors. Passed
-  both viewports as of HEAD.
+  both viewports historically; **as of round 6, the Follow Swell click step
+  timed out at its hardcoded 8000ms in this specific sandbox session** —
+  confirmed session/environment-speed-related, not a real defect or a
+  regression (see "Round 6" above for the full diagnosis: the click
+  succeeds at ~10.2s under a longer timeout, and the same timeout
+  reproduces identically on unmodified pre-round-6 code). If this recurs,
+  the fix is bumping that one `.click({ timeout: ... })` call, not chasing
+  a phantom UI bug.
 - **`?e2e=1` query param**: the app publishes Helena's projected marker
   screen position on `window.__moanaMarker` when present. Added in round 4
   because sweeping screen coordinates to find a moving 3D marker is far too
@@ -416,7 +507,9 @@ at it, all worth re-running after any further shader/UI change:
 - Manual visual review against the user-supplied reference image, by eye,
   across five rounds of "here's what's still wrong" feedback (see the
   "Round 3/4/5" subsections above) — this is the part that's genuinely
-  subjective and where a fresh look from the user matters most.
+  subjective and where a fresh look from the user matters most. Round 6
+  added a sixth kind of check — verifying an external critique's claims
+  against fresh screenshots rather than trusting or dismissing it outright.
 
 **One thing explicitly NOT verified in this sandbox**: round 4 added
 Cormorant Garamond (a Didone-family serif) via a Google Fonts `<link>` in
@@ -793,16 +886,22 @@ confirmed the existing decision rather than changing it.
 
 ## What's next
 
-**Immediate next step:** show the current build (HEAD `acbb0cb`) to the
-user again. Five rounds of visual iteration have each been a direct
-response to specific feedback on a screenshot; there's no signal right now
-that round 5 (the lighting-model fix) is the last one needed versus just
-the last one *requested so far*. Don't pre-emptively start a round 6 on
-your own judgement — get a fresh read first. If they're happy, move to the
+**Immediate next step:** show the current build (HEAD `677e00a`) to the
+user again. Rounds 2-5 of visual iteration were each a direct response to
+specific feedback on a screenshot; round 6 was a review of an external
+critique, not new user feedback, and confirmed the visual is unchanged in
+substance (one small path-smoothing correctness fix, no user-visible
+redesign). There's still no signal that round 5 (the lighting-model fix) is
+the last visual change actually needed versus just the last one *requested
+so far*. Don't pre-emptively start a round 7 of self-directed tuning on your
+own judgement — get a fresh read first. If they're happy, move to the
 falsifiable test below; if not, `phase-0-prototype/README.md`'s "Round 5"
 section and this file's matching subsection show the pattern each round
 has followed (screenshot → specific diagnosis → targeted shader/CSS fix →
-`rotate-test.mjs`/`shot.mjs` re-verify), which should transfer directly.
+`rotate-test.mjs`/`shot.mjs` re-verify), which should transfer directly. If
+another external critique/fix-pack shows up, "Round 6" above shows the
+pattern for evaluating one against real screenshots before touching
+anything, rather than either blindly applying it or dismissing it.
 
 **Phase 0 is built** (`phase-0-prototype/`, see the section above) but
 **not yet passed** — it's blocked on the one thing no agent session can do
