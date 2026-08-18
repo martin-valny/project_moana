@@ -8,7 +8,6 @@ import { GlobeSphere } from './GlobeSphere';
 import { latLonToVector3 } from './geo';
 import { HelenaPath } from './HelenaPath';
 import { detectQualityTier } from './qualityTier';
-import { normalizeEnergy } from '../data/interpolate';
 import type { SwellPathPoint, SwellPulse } from '../data/types';
 
 const RADIUS = 2;
@@ -67,10 +66,14 @@ function FillFrameCamera({ radius }: { radius: number }) {
 interface GlobeProps {
   pulse: SwellPulse;
   currentPoint: SwellPathPoint;
+  /** Hours relative to app-load time, from the Timeline — round 9 threads this
+      into GlobeSphere so the whole swell field advances with the scrubber,
+      not just Helena's marker. See MASTER_BUILD_PLAN.md §11's round-9 entry. */
+  offsetHours: number;
   onSelectHelena: () => void;
 }
 
-export function Globe({ pulse, currentPoint, onSelectHelena }: GlobeProps) {
+export function Globe({ pulse, currentPoint, offsetHours, onSelectHelena }: GlobeProps) {
   const quality = useMemo(() => detectQualityTier(), []);
   // Idle rotation is decorative motion; honour a reduced-motion preference.
   // (It also makes the scene deterministic for the Playwright checks.)
@@ -78,7 +81,6 @@ export function Globe({ pulse, currentPoint, onSelectHelena }: GlobeProps) {
     () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false,
     [],
   );
-  const energy01 = normalizeEnergy(currentPoint.energy);
 
   return (
     <Canvas
@@ -92,7 +94,7 @@ export function Globe({ pulse, currentPoint, onSelectHelena }: GlobeProps) {
       <Suspense fallback={null}>
         {/* Sparse, low-opacity, intentional — not scattered debug dots. */}
         <Stars radius={140} depth={60} count={500} factor={0.6} saturation={0} fade speed={0.2} />
-        <GlobeSphere radius={RADIUS} lat={currentPoint.lat} lon={currentPoint.lon} headingDeg={currentPoint.heading_deg} energy01={energy01} octaves={quality.octaves} />
+        <GlobeSphere radius={RADIUS} pulse={pulse} offsetHours={offsetHours} octaves={quality.octaves} />
         <HelenaPath pulse={pulse} radius={RADIUS} currentPoint={currentPoint} onSelect={onSelectHelena} />
       </Suspense>
 

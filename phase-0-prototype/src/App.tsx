@@ -38,7 +38,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <Globe pulse={pulse} currentPoint={currentPoint} onSelectHelena={() => setSelected((v) => !v)} />
+      <Globe pulse={pulse} currentPoint={currentPoint} offsetHours={offsetHours} onSelectHelena={() => setSelected((v) => !v)} />
 
       <div className="overlay">
         <div className="topLeft">

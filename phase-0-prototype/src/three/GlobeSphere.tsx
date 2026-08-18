@@ -1,9 +1,11 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useLoader } from '@react-three/fiber';
 import * as THREE from 'three';
-import { latLonToVector3 } from './geo';
 import { SIMPLEX_NOISE_GLSL } from './shaders/noise';
 import { FBM_GLSL } from './shaders/fbm';
+import { MAX_SWELL_SOURCES, angularFrontDistanceRad, buildSwellSources } from '../data/swellSources';
+import { normalizeEnergy } from '../data/interpolate';
+import type { SwellPulse } from '../data/types';
 
 const SURFACE_VERTEX = /* glsl */ `
   varying vec3 vPos;
@@ -33,9 +35,23 @@ const SURFACE_FRAGMENT = /* glsl */ `
   uniform sampler2D uNightTexture;  // earth-night.jpg: real continent structure + city lights
   uniform vec3 uLightDir; // fixed world-space direction, NOT view-relative
   uniform float uTime;
-  uniform vec3 uFlowBias;   // Helena's current heading, as a rough global bias (see note below)
-  uniform float uEnergy01;  // Helena's current energy, normalised 0..1
   uniform int uOctaves;
+
+  // Round 9: replaces a single global flow direction (Helena's own compass
+  // heading, applied to the entire planet) with real swell propagation from
+  // several storm sources. This is what "the ocean looks smeared" was
+  // describing — one direction everywhere reads as smear, not current;
+  // direction that varies with position and time reads as flow. Per source:
+  // an origin, an initial travel direction, how far its front has reached
+  // (uSourceFront, precomputed on the CPU from Cg = 1.56 * period per
+  // phase-1-validation/physics.py's group_velocity_kmh, so the two agree),
+  // and a normalised energy for weighting. See swellSources.ts.
+  const int MAX_SOURCES = 6;
+  uniform int uSourceCount;
+  uniform vec3 uSourceOrigin[MAX_SOURCES];
+  uniform vec3 uSourceDir[MAX_SOURCES];
+  uniform float uSourceFront[MAX_SOURCES];   // angular distance travelled, radians
+  uniform float uSourceEnergy[MAX_SOURCES];  // normalised 0..1
 
   uniform vec3 uLandColor;
   uniform vec3 uCoastColor;
@@ -104,19 +120,116 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // they cannot be a black void without dominating the whole frame.
       // In the reference the continents carry visible terrain texture and
       // sit only slightly darker than the unlit ocean around them.
-      color = uLandColor + vec3(0.42, 0.40, 0.37) * pow(nightLum, 1.35) * 1.15;
+      // Round 9: pulled back again. Round 8's lift made real terrain
+      // texture read, but too much of it — the continents were competing
+      // with the ocean for attention when §5.1 wants them as orientation
+      // only. Steeper curve, lower gain: enough relief to see a coastline
+      // and a hint of landform, not a legible terrain map.
+      color = uLandColor + vec3(0.34, 0.33, 0.31) * pow(nightLum, 1.8) * 0.62;
     } else {
+      // --- Swell propagation: per-fragment direction and energy --------
+      // For each source, three things at this fragment (vPos):
+      //  - arrived: has the source's front (grown from uSourceFront, which
+      //    the JS side advances as the timeline scrubs) reached here yet,
+      //    with a soft leading edge rather than a hard cutoff — real swell
+      //    fills in behind a front, it doesn't just vanish ahead of it.
+      //  - spread: real storms don't radiate a full 360-degree disc — swell
+      //    stays within roughly a 60-degree arc of the storm's actual
+      //    direction. toP is the tangent AT THE SOURCE pointing toward this
+      //    fragment; comparing it to the source's own travel direction is
+      //    what makes this a directional fan rather than an expanding ring.
+      //  - falloff: simple distance decay (real geometric spreading on a
+      //    sphere is closer to 1/sqrt(sin(d)), but that blows up at d=0 and
+      //    this is a stylised prototype, not a physics sim — 1/(1+d*k) is
+      //    numerically safe and tunable by eye like everything else here).
+      // away, the outward tangent AT THIS FRAGMENT continuing along the
+      // same great circle, is what previous rounds called the flow bias —
+      // the difference is it is now recomputed per fragment per source
+      // instead of once for the whole planet.
+      const float FRONT_WIDTH = 0.14;
+      const float SPREAD_COS_FULL = 0.5;   // cos(60°) — spread reaches zero here
+      const float SPREAD_COS_HALF = 0.906; // cos(25°) — full strength within this cone
+
+      vec3 flowAccum = vec3(0.0);
+      float energyAccum = 0.0;
+
+      for (int i = 0; i < MAX_SOURCES; i++) {
+        if (i >= uSourceCount) break;
+        vec3 S = uSourceOrigin[i];
+        vec3 D = uSourceDir[i];
+        float d = acos(clamp(dot(S, vPos), -1.0, 1.0));
+
+        vec3 toPRaw = vPos - S * dot(S, vPos);
+        float toPLen = length(toPRaw);
+        vec3 toP = toPLen > 1e-4 ? toPRaw / toPLen : D;
+        float spreadRaw = smoothstep(SPREAD_COS_FULL, SPREAD_COS_HALF, dot(D, toP));
+        // The real bug this round shipped with, and the actual cause of a
+        // sharp diamond/kite artifact right at Helena's marker: toP (the
+        // bearing FROM the source TO this fragment) sweeps through its full
+        // 360-degree range over a physically tiny distance near the source's
+        // own origin — small steps around the pole are huge steps in
+        // bearing. The directional cone test (spreadRaw) is well-defined
+        // there mathematically, but it cuts out a literal pie-slice at a
+        // scale small enough to render as a hard-edged wedge rather than the
+        // soft fan it becomes farther out. Blending toward fully omni-
+        // directional within about 15 degrees of each source's own origin
+        // fixes this at the geometric root — and is physically reasonable
+        // too: a storm's generation area isn't a strongly directional point
+        // source yet, only the swell radiating away from it organizes into
+        // one.
+        float poleFade = smoothstep(0.0, 0.26, d);
+        float spread = mix(1.0, spreadRaw, poleFade);
+
+        float arrived = 1.0 - smoothstep(uSourceFront[i] - FRONT_WIDTH, uSourceFront[i] + FRONT_WIDTH, d);
+        float falloff = 1.0 / (1.0 + d * 1.3);
+        float w = spread * arrived * falloff * uSourceEnergy[i];
+
+        vec3 awayRaw = vPos * dot(S, vPos) - S;
+        float awayLen = length(awayRaw);
+        vec3 away = awayLen > 1e-4 ? awayRaw / awayLen : D;
+
+        flowAccum += away * w;
+        energyAccum += w;
+      }
+
+      // Fragments outside every source's reach (most of the globe, most of
+      // the time) get a fallback axis purely to keep the anisotropic warp
+      // below well-defined — with energyAccum ~0 the noise stays low-
+      // contrast there regardless of which direction this points.
+      float flowMag = length(flowAccum);
+      vec3 f = flowMag > 1e-5 ? normalize(flowAccum) : vec3(0.0, 0.0, 1.0);
+      float fieldEnergy01 = clamp(energyAccum, 0.0, 1.0);
+
       // --- Anisotropic noise domain -----------------------------------
       // The single most important line in this shader. Splitting the sample
       // position into components along and across the flow direction and
-      // scaling them unequally makes features ~8x longer along the flow
-      // than across it. Sampling isotropically (as previous rounds did)
-      // can only ever produce curly, equal-sided blobs — no colour-ramp or
-      // threshold tuning turns those into long streaks.
-      vec3 f = normalize(uFlowBias);
+      // scaling them unequally makes features longer along the flow than
+      // across it. Sampling isotropically (as early rounds did) can only
+      // ever produce curly, equal-sided blobs — no colour-ramp or threshold
+      // tuning turns those into streaks.
+      //
+      // Round 9: ratio brought down from ~10:1 to 5:1 at full confidence.
+      // Direction now genuinely varies across the globe instead of being one
+      // constant everywhere, so less stretch is needed to read as flow —
+      // 10:1 was a large part of what earlier rounds' feedback called
+      // "smeared".
+      //
+      // dirConfidence, and blending the ratio itself toward isotropic as it
+      // drops, exists to fix a real artifact the first version of this
+      // shipped with: "direction away from a point on a sphere" is a vector
+      // field with a singularity exactly at that point (the same reason you
+      // can't comb a hairy ball flat at the poles) — direction rotates
+      // arbitrarily fast in the small neighbourhood around every source's
+      // own origin. Stretched 5:1 through the noise sample, that showed up
+      // as a sharp-edged diamond artifact right at Helena's origin. flowMag
+      // (the un-normalised sum, before it collapses to a unit vector) is
+      // small both there AND in genuinely calm water far from any source —
+      // exactly the two places a confident direction shouldn't be trusted —
+      // so it doubles as the fade signal for free.
+      float dirConfidence = clamp(flowMag * 6.0, 0.0, 1.0);
       vec3 along = dot(vPos, f) * f;
       vec3 across = vPos - along;
-      vec3 coord = along * 0.2 + across * 2.0;
+      vec3 coord = along * mix(1.0, 0.35, dirConfidence) + across * mix(1.0, 1.75, dirConfidence);
 
       // Travel along the flow, plus a slow independent evolution so the
       // field never reads as a rigid texture sliding past.
@@ -131,7 +244,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // filament detail is exactly what the reference shows more of.
       float n = warpedFbm(coord * 0.95, uOctaves, 0.45, evolve);
       n += fbm(coord * 3.0, uOctaves) * 0.06; // wispy edge detail
-      n *= 0.75 + uEnergy01 * 0.9;                    // energy drives contrast
+      n *= 0.75 + fieldEnergy01 * 0.9;                 // local swell energy drives contrast
 
       // Broad soft bands with a small bright core. Two failure modes to
       // stay between: a threshold low enough to light the whole sphere
@@ -228,7 +341,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
     // the disc, not a thin outline — and it passes over land and ocean
     // alike, which is a large part of what unifies the two into one lit
     // sphere rather than a textured ball with holes cut in it.
-    color += uScatterColor * pow(1.0 - facing, 3.0) * 0.28;
+    color += uScatterColor * pow(1.0 - facing, 3.0) * 0.20;
 
     gl_FragColor = vec4(color, 1.0);
   }
@@ -249,39 +362,56 @@ const ATMOSPHERE_FRAGMENT = /* glsl */ `
   varying vec3 vNormal;
   varying vec3 vViewPosition;
   uniform vec3 uColor;
+  uniform float uLimbCos;
   void main() {
     vec3 viewDir = normalize(-vViewPosition);
     // This shell is rendered BackSide, so every visible fragment has
-    // facing <= 0 by construction (0 exactly at the true silhouette,
-    // more negative further round the far side) — remap that to a 0..1
-    // glow brightest at the silhouette, never a flat/uniform ring.
+    // facing <= 0 by construction.
     float facing = dot(normalize(vNormal), viewDir);
     // Round 7: round 5 cut this to a near-whisper specifically because the
     // shading underneath was still camera-relative and competing with the
     // ribbons for attention — that problem is gone now that round 5 itself
     // replaced it with world-space directional lighting. The reference
     // shows a genuinely prominent limb glow; broadened (lower power) and
-    // brightened (higher peak alpha) to match.
+    // ROUND 9 — this falloff was inverted, which is why the halo read as a
+    // thick band with a hard outer edge and "no transitions".
     //
-    // Round 8b: a first attempt at "broader" (shell 1.085, power 2.0,
-    // alpha 0.45) overshot into a distinct teal *ring* floating around the
-    // planet with its own visible outer edge — at whole-disc framing an
-    // 8.5%-of-radius shell is simply a large object in frame, not a haze.
-    // The reference's halo hugs the limb and fades out within a few
-    // percent of the radius, so: smaller shell, tighter falloff, lower
-    // peak. Brightness at the limb now comes mostly from the in-scattering
-    // term on the planet surface itself, which cannot ring by construction.
-    float fresnel = pow(clamp(1.0 + facing, 0.0, 1.0), 2.6);
-    gl_FragColor = vec4(uColor, fresnel * 0.30);
+    // facing is 0 at the SHELL's own outer silhouette and reaches its
+    // most negative value, -uLimbCos, where a ray grazing the planet's
+    // limb crosses the shell. The old pow(1.0 + facing, k) therefore
+    // peaked at 1.0 on the *outer* edge of the atmosphere and fell off
+    // *inward* toward the planet — the exact opposite of how a real
+    // atmospheric halo behaves — and because the shell geometry simply
+    // ends there, that maximum was cut off dead, leaving a hard rim.
+    // Widening the shell in round 8 only made the bad band thicker.
+    //
+    // Normalising by uLimbCos maps t = 1 at the planet's limb to t = 0 at
+    // the outer edge of the atmosphere, so the glow is brightest where the
+    // air is thickest and fades smoothly to nothing at the top of it. A
+    // wider shell now buys a longer, softer gradient instead of a fatter
+    // ring.
+    float t = clamp(-facing / uLimbCos, 0.0, 1.0);
+    // Round 9b: the direction fix was correct, but the first magnitude pass
+    // (shell 1.15, power 2.2, peak 0.55) was a genuine overcorrection —
+    // fixing the inward-fading bug meant the WHOLE shell could finally
+    // glow at once instead of only a thin cut-off band, and a shell that
+    // size at that brightness filled most of the frame's black margin. Much
+    // smaller shell, steeper falloff, lower peak: a glow that hugs the limb
+    // rather than one that competes with the planet for the frame.
+    gl_FragColor = vec4(uColor, pow(t, 3.2) * 0.22);
   }
 `;
 
+// Radius of the atmosphere shell relative to the globe. With the corrected
+// (outward-fading) falloff this sets how far the halo extends, not how
+// thick a band it draws — so it can be generous without becoming a ring.
+const ATMOSPHERE_SCALE = 1.045;
+
 interface GlobeSphereProps {
   radius: number;
-  lat: number;
-  lon: number;
-  headingDeg: number;
-  energy01: number;
+  pulse: SwellPulse;
+  /** Hours relative to app-load time — the same value the Timeline drives (§8's scrubber), now read by the whole field, not just Helena's marker. See MASTER_BUILD_PLAN.md §11's round-9 decision-log entry for why that constraint was deliberately superseded. */
+  offsetHours: number;
   octaves?: number;
 }
 
@@ -291,17 +421,13 @@ interface GlobeSphereProps {
  * replaces Phase 0's earlier particle field. Both share one shader pass
  * so they're always in registration.
  *
- * Scope note: Phase 0 has exactly one swell (Helena), not a populated
- * field, so `uFlowBias`/`uEnergy01` are a single global bias rather than
- * the per-cell direction/energy the real `SwellFieldFrame` will provide
- * from Phase 2 onward. Truthful-not-decorative (§1.2) is still honoured —
- * the bias is Helena's real current heading/energy, not an arbitrary
- * constant — it just isn't spatially varying yet because there's nothing
- * to vary it by. The ribbons therefore run along her real travel
- * direction, which is what makes the anisotropy above meaningful rather
- * than merely decorative.
+ * Round 9: the surface is driven by `swellSources.ts`'s multi-source
+ * propagation model (Helena plus several invented storms) rather than a
+ * single global flow direction — see the round-9 PROGRESS.md entry for why
+ * (short version: one direction for the whole planet is what "the ocean
+ * looks smeared" was describing).
  */
-export function GlobeSphere({ radius, lat, lon, headingDeg, energy01, octaves = 5 }: GlobeSphereProps) {
+export function GlobeSphere({ radius, pulse, offsetHours, octaves = 5 }: GlobeSphereProps) {
   // Round 7: a real (Natural-Earth-derived) land/ocean mask replaces the
   // earlier hand-rolled scanline-fill one — see public/textures/SOURCES.md.
   const landMask = useLoader(THREE.TextureLoader, '/textures/earth-water.png');
@@ -322,32 +448,54 @@ export function GlobeSphere({ radius, lat, lon, headingDeg, energy01, octaves = 
   nightTexture.generateMipmaps = true;
   nightTexture.anisotropy = 4;
 
-  // A compass bearing is only meaningful relative to a position: the same
-  // bearing points in a different 3D direction at every point on the globe.
-  // Build the real surface-tangent vector at Helena's current location by
-  // differencing the sphere mapping, then combining local north/east by the
-  // bearing. The previous version collapsed every bearing into the equatorial
-  // plane, which is why the ribbons always ran dead horizontal regardless of
-  // where Helena was or which way she was heading.
-  const flowBias = useMemo(() => {
-    const eps = 0.35;
-    const here = latLonToVector3(lat, lon, 1);
-    const north = latLonToVector3(lat + eps, lon, 1).sub(here).normalize();
-    const east = latLonToVector3(lat, lon + eps, 1).sub(here).normalize();
-    const bearing = (headingDeg * Math.PI) / 180;
-    return north
-      .multiplyScalar(Math.cos(bearing))
-      .add(east.multiplyScalar(Math.sin(bearing)))
-      .normalize();
-  }, [lat, lon, headingDeg]);
+  // Helena plus the invented storms (see swellSources.ts). The pulse's
+  // identity is stable for the session (App.tsx builds it once from a fixed
+  // startTime), so this only needs to recompute if that identity changes.
+  const sources = useMemo(() => buildSwellSources(pulse), [pulse]);
+
+  // Fixed-length arrays for the shader's uniform arrays: unused slots (if
+  // fewer than MAX_SWELL_SOURCES sources exist) get zero energy below, so
+  // they contribute nothing regardless of what origin/direction they hold.
+  const { originArray, dirArray } = useMemo(() => {
+    const originArray: THREE.Vector3[] = [];
+    const dirArray: THREE.Vector3[] = [];
+    for (let i = 0; i < MAX_SWELL_SOURCES; i++) {
+      const s = sources[i];
+      originArray.push(s ? s.origin.clone() : new THREE.Vector3(0, 1, 0));
+      dirArray.push(s ? s.direction.clone() : new THREE.Vector3(0, 0, 1));
+    }
+    return { originArray, dirArray };
+  }, [sources]);
+
+  // Recomputed whenever the timeline scrubs — each source's front grows
+  // (or, scrubbed backward, shrinks) with `offsetHours` per
+  // angularFrontDistanceRad's Cg = 1.56 * period.
+  const { frontArray, energyArray } = useMemo(() => {
+    const frontArray: number[] = [];
+    const energyArray: number[] = [];
+    for (let i = 0; i < MAX_SWELL_SOURCES; i++) {
+      const s = sources[i];
+      if (!s) {
+        frontArray.push(0);
+        energyArray.push(0);
+        continue;
+      }
+      frontArray.push(angularFrontDistanceRad(s.periodS, s.spawnOffsetHours, offsetHours));
+      energyArray.push(normalizeEnergy(s.heightM * s.heightM * s.periodS));
+    }
+    return { frontArray, energyArray };
+  }, [sources, offsetHours]);
 
   const surfaceUniforms = useMemo(
     () => ({
       uLandMask: { value: landMask },
       uNightTexture: { value: nightTexture },
       uTime: { value: 0 },
-      uFlowBias: { value: flowBias },
-      uEnergy01: { value: energy01 },
+      uSourceCount: { value: sources.length },
+      uSourceOrigin: { value: originArray },
+      uSourceDir: { value: dirArray },
+      uSourceFront: { value: frontArray },
+      uSourceEnergy: { value: energyArray },
       uOctaves: { value: octaves },
       // World-space key light direction — soft upper-left bias, matching
       // the reference's gentle overall brightness gradient. Fixed, not
@@ -370,16 +518,55 @@ export function GlobeSphere({ radius, lat, lon, headingDeg, energy01, octaves = 
     [landMask, nightTexture],
   );
 
+  // The actual fix, and the most significant bug this round found: R3F's
+  // <shaderMaterial uniforms={surfaceUniforms}> does NOT keep the material's
+  // .uniforms as the same object passed in — it clones it, once, when the
+  // prop is first applied. Confirmed directly (comparing object identity in
+  // a running page): `materialRef.current.uniforms.uSourceFront !==
+  // surfaceUniforms.uSourceFront`. Mutating the JS object declared above —
+  // which is what every earlier version of this file did, including the
+  // uTime line that's animated the ocean since round 2 — was mutating a
+  // copy the renderer never reads again after mount. It is genuinely
+  // frozen: checked materialRef.current.uniforms.uTime.value on a running
+  // page 3 seconds apart and it read 0 both times. The ocean has never
+  // actually animated over time in this project; every screenshot across
+  // every round happened to look like a plausible static frame of one.
+  //
+  // (First fix attempt here was wrong in an instructive way: the timeline
+  // not moving the field looked exactly like a stale-closure bug — useFrame
+  // capturing an old `frontArray` — and switching that update to a
+  // useEffect was a real improvement on its own merits, but didn't fix the
+  // actual symptom, because the deeper problem was the target object being
+  // mutated, not when. Left as useEffect below since it's still the more
+  // correct trigger; the material ref is the part that actually matters.)
+  //
+  // Fix: mutate the material's own uniforms via a ref, never the object
+  // that was only ever used to set initial values.
+  const materialRef = useRef<THREE.ShaderMaterial>(null);
+
   useFrame((state) => {
-    surfaceUniforms.uTime.value = state.clock.elapsedTime;
-    surfaceUniforms.uFlowBias.value = flowBias;
-    surfaceUniforms.uEnergy01.value = energy01;
-    surfaceUniforms.uOctaves.value = octaves;
+    if (materialRef.current) materialRef.current.uniforms.uTime.value = state.clock.elapsedTime;
   });
+
+  useEffect(() => {
+    const material = materialRef.current;
+    if (!material) return;
+    material.uniforms.uSourceCount.value = sources.length;
+    material.uniforms.uSourceOrigin.value = originArray;
+    material.uniforms.uSourceDir.value = dirArray;
+    material.uniforms.uSourceFront.value = frontArray;
+    material.uniforms.uSourceEnergy.value = energyArray;
+    material.uniforms.uOctaves.value = octaves;
+  }, [sources, originArray, dirArray, frontArray, energyArray, octaves]);
 
   const atmosphereUniforms = useMemo(
     () => ({
       uColor: { value: new THREE.Color('#9fd8e8') },
+      // cos of the angle at which a limb-grazing ray crosses the shell —
+      // i.e. the most negative `facing` any visible shell fragment can
+      // have. Derived from ATMOSPHERE_SCALE rather than hand-tuned so the
+      // falloff can never silently desync from the mesh's actual size.
+      uLimbCos: { value: Math.sqrt(1 - 1 / (ATMOSPHERE_SCALE * ATMOSPHERE_SCALE)) },
     }),
     [],
   );
@@ -388,9 +575,9 @@ export function GlobeSphere({ radius, lat, lon, headingDeg, energy01, octaves = 
     <group>
       <mesh>
         <sphereGeometry args={[radius, 128, 128]} />
-        <shaderMaterial vertexShader={SURFACE_VERTEX} fragmentShader={SURFACE_FRAGMENT} uniforms={surfaceUniforms} />
+        <shaderMaterial ref={materialRef} vertexShader={SURFACE_VERTEX} fragmentShader={SURFACE_FRAGMENT} uniforms={surfaceUniforms} />
       </mesh>
-      <mesh scale={1.05}>
+      <mesh scale={ATMOSPHERE_SCALE}>
         <sphereGeometry args={[radius, 64, 64]} />
         <shaderMaterial
           vertexShader={ATMOSPHERE_VERTEX}
