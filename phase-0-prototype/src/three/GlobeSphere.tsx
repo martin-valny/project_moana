@@ -29,7 +29,8 @@ const SURFACE_FRAGMENT = /* glsl */ `
   varying vec3 vViewPosition;
   varying vec3 vWorldNormal;
 
-  uniform sampler2D uLandMask;
+  uniform sampler2D uLandMask;      // earth-water.png: white(1)=ocean, black(0)=land
+  uniform sampler2D uNightTexture;  // earth-night.jpg: real continent structure + city lights
   uniform vec3 uLightDir; // fixed world-space direction, NOT view-relative
   uniform float uTime;
   uniform vec3 uFlowBias;   // Helena's current heading, as a rough global bias (see note below)
@@ -60,20 +61,37 @@ const SURFACE_FRAGMENT = /* glsl */ `
 
   void main() {
     vec2 uv = posToUv(vPos);
-    // The mask is pre-blurred (see scripts/generate-land-mask.mjs), so it
-    // arrives as a smooth 0..1 field rather than hard 0/1. That lets the
-    // coastline be a narrow band around the 0.5 contour — thin and smooth
-    // at any zoom — instead of fwidth() on a hard mask, which produced the
-    // jagged stair-stepped outlines of the previous round.
-    float m = texture2D(uLandMask, uv).r;
+    // earth-water.png is a real (Natural-Earth-derived) mask: white(1)=ocean,
+    // black(0)=land, with actual river networks — inverted here so every
+    // line below keeps the original m: 1=land, 0=ocean convention. Mip-mapped
+    // bilinear filtering (see the TextureLoader setup below) keeps the 0.5
+    // contour smooth rather than stair-stepped, same goal as the old
+    // pre-blurred hand-generated mask it replaces (round 4).
+    float m = 1.0 - texture2D(uLandMask, uv).r;
     float stroke = smoothstep(0.30, 0.5, m) * smoothstep(0.70, 0.5, m) * 0.10;
+
+    // Round 7: real Earth imagery (night-lights — continent structure and
+    // city-light warmth, already close to this app's own dark navy palette)
+    // sampled at every fragment, remapped through this shader's own hand-
+    // tuned colours rather than trusted verbatim — grounds both land and
+    // ocean in real geography/texture instead of flat hand-picked colours.
+    vec3 nightSample = texture2D(uNightTexture, uv).rgb;
+    float nightLum = dot(nightSample, vec3(0.299, 0.587, 0.114));
 
     vec3 color;
 
     if (m > 0.5) {
-      // Barely distinguishable from deep ocean — a silhouette that rewards
-      // close inspection, never a map (§5.1).
-      color = uLandColor;
+      // Land: a near-black navy base lifted by the real texture's own
+      // luminance (coastline structure, subtle relief, city-light flecks) —
+      // reads as landmass at a glance without becoming a legible daytime
+      // map (§5.1 — still coarse, still an impression, just no longer
+      // indistinguishable from the ocean beside it). A steep power curve
+      // (2.2, not 0.8) keeps ordinary mid-grey terrain luminance suppressed
+      // near-black — only genuinely bright source pixels (city lights, ice
+      // sheets) lift noticeably; the first attempt at this used a gentle
+      // curve and a raw satellite-photo look (bright, uniform tan) leaked
+      // through instead of staying inside this app's own dark palette.
+      color = uLandColor + vec3(0.5, 0.4, 0.3) * pow(nightLum, 2.2) * 0.9;
     } else {
       // --- Anisotropic noise domain -----------------------------------
       // The single most important line in this shader. Splitting the sample
@@ -93,9 +111,13 @@ const SURFACE_FRAGMENT = /* glsl */ `
       vec3 evolve = f * 0.15 + vec3(uTime * 0.009);
 
       // Moderate warp: enough for gentle S-curves and feathering, not so
-      // much that it curls the streaks back into noodles.
-      float n = warpedFbm(coord * 0.95, min(uOctaves, 3), 0.45, evolve);
-      n += fbm(coord * 3.0, min(uOctaves, 3)) * 0.06; // wispy edge detail
+      // much that it curls the streaks back into noodles. Round 7: octave
+      // cap raised from a flat 3 to the tier's real budget (uOctaves, up to
+      // 5 on high tier) — previously high-tier hardware paid for 5 octaves
+      // in qualityTier.ts but this cap meant only 3 were ever used. Finer
+      // filament detail is exactly what the reference shows more of.
+      float n = warpedFbm(coord * 0.95, uOctaves, 0.45, evolve);
+      n += fbm(coord * 3.0, uOctaves) * 0.06; // wispy edge detail
       n *= 0.75 + uEnergy01 * 0.9;                    // energy drives contrast
 
       // Broad soft bands with a small bright core. Two failure modes to
@@ -108,12 +130,26 @@ const SURFACE_FRAGMENT = /* glsl */ `
 
       // Teal shows up as broad regional patches, as in the reference —
       // low frequency and tied to position, not to the ribbon noise.
-      float tealPatch = smoothstep(0.25, 0.7, snoise(vPos * 0.55 + 17.0));
+      // Round 7: raised the frequency (0.55 -> 1.7, so a whole visible
+      // hemisphere can't land entirely inside one "zero" region of this
+      // field) — but that alone didn't fix it. The REAL bug, found only by
+      // reasoning through the blend chain after screenshots kept showing
+      // zero teal at every camera angle: this used to be two independent
+      // sequential mix() calls (deep -> teal, then separately deep -> mid),
+      // and the second one's weight (up to 0.85) overwrote almost all of
+      // what the first one set, structurally, regardless of tealPatch's
+      // value. Fixed by blending mid/teal into ONE colour first, then
+      // mixing that single result in once.
+      float tealPatch = smoothstep(0.05, 0.55, snoise(vPos * 1.7 + 17.0));
+      vec3 midOrTeal = mix(uOceanMid, uOceanTeal, tealPatch);
 
       vec3 oceanColor = uOceanDeep;
-      oceanColor = mix(oceanColor, uOceanTeal, tealPatch * band * 0.3);
-      oceanColor = mix(oceanColor, uOceanMid, band * (1.0 - tealPatch * 0.4) * 0.85);
+      oceanColor = mix(oceanColor, midOrTeal, band * 0.85);
       oceanColor = mix(oceanColor, uOceanBright, crest * 0.34);
+      // Real bathymetric/current texture as a subtle multiply on top of the
+      // procedural ribbons — grounds them in actual geography instead of
+      // being the sole source of ocean detail.
+      oceanColor *= 1.0 + nightLum * 0.6;
 
       color = oceanColor;
     }
@@ -133,7 +169,12 @@ const SURFACE_FRAGMENT = /* glsl */ `
     // drags, which is the same flattening problem wearing a different hat.
     float lambert = dot(vWorldNormal, uLightDir);
     float lit = smoothstep(-0.6, 0.9, lambert);
-    color *= mix(0.62, 1.12, lit);
+    // Round 7: widened from mix(0.62, 1.12, ...) — the reference reads as a
+    // bright, well-exposed "hero photograph," not a moody/dark abstraction;
+    // brightened the lit side more than the dark side so the directional
+    // read (round 5's actual fix) stays intact rather than just flattening
+    // upward.
+    color *= mix(0.68, 1.35, lit);
 
     // What used to carry the "sphere" read on its own is now just a
     // whisper: a near-imperceptible grazing-angle falloff, and a thin
@@ -170,8 +211,14 @@ const ATMOSPHERE_FRAGMENT = /* glsl */ `
     // more negative further round the far side) — remap that to a 0..1
     // glow brightest at the silhouette, never a flat/uniform ring.
     float facing = dot(normalize(vNormal), viewDir);
-    float fresnel = pow(clamp(1.0 + facing, 0.0, 1.0), 3.5);
-    gl_FragColor = vec4(uColor, fresnel * 0.22);
+    // Round 7: round 5 cut this to a near-whisper specifically because the
+    // shading underneath was still camera-relative and competing with the
+    // ribbons for attention — that problem is gone now that round 5 itself
+    // replaced it with world-space directional lighting. The reference
+    // shows a genuinely prominent limb glow; broadened (lower power) and
+    // brightened (higher peak alpha) to match.
+    float fresnel = pow(clamp(1.0 + facing, 0.0, 1.0), 2.6);
+    gl_FragColor = vec4(uColor, fresnel * 0.4);
   }
 `;
 
@@ -201,13 +248,25 @@ interface GlobeSphereProps {
  * than merely decorative.
  */
 export function GlobeSphere({ radius, lat, lon, headingDeg, energy01, octaves = 5 }: GlobeSphereProps) {
-  const landMask = useLoader(THREE.TextureLoader, '/textures/land-mask.png');
+  // Round 7: a real (Natural-Earth-derived) land/ocean mask replaces the
+  // earlier hand-rolled scanline-fill one — see public/textures/SOURCES.md.
+  const landMask = useLoader(THREE.TextureLoader, '/textures/earth-water.png');
   landMask.wrapS = THREE.RepeatWrapping;
   landMask.colorSpace = THREE.NoColorSpace;
   landMask.minFilter = THREE.LinearMipmapLinearFilter;
   landMask.magFilter = THREE.LinearFilter;
   landMask.generateMipmaps = true;
   landMask.anisotropy = 4;
+
+  // Round 7: real Earth night-lights imagery for continent structure and
+  // ocean fine detail — see public/textures/SOURCES.md for source/license.
+  const nightTexture = useLoader(THREE.TextureLoader, '/textures/earth-night.jpg');
+  nightTexture.wrapS = THREE.RepeatWrapping;
+  nightTexture.colorSpace = THREE.NoColorSpace; // sampled as raw texel data, same as this shader's hand-tuned hex colours — not colour-managed
+  nightTexture.minFilter = THREE.LinearMipmapLinearFilter;
+  nightTexture.magFilter = THREE.LinearFilter;
+  nightTexture.generateMipmaps = true;
+  nightTexture.anisotropy = 4;
 
   // A compass bearing is only meaningful relative to a position: the same
   // bearing points in a different 3D direction at every point on the globe.
@@ -231,6 +290,7 @@ export function GlobeSphere({ radius, lat, lon, headingDeg, energy01, octaves = 
   const surfaceUniforms = useMemo(
     () => ({
       uLandMask: { value: landMask },
+      uNightTexture: { value: nightTexture },
       uTime: { value: 0 },
       uFlowBias: { value: flowBias },
       uEnergy01: { value: energy01 },
@@ -248,7 +308,7 @@ export function GlobeSphere({ radius, lat, lon, headingDeg, energy01, octaves = 
       uScatterColor: { value: new THREE.Color('#4d9fc4') },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [landMask],
+    [landMask, nightTexture],
   );
 
   useFrame((state) => {

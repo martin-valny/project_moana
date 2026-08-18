@@ -1,7 +1,8 @@
 import { Suspense, useEffect, useMemo } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
-import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocessing';
+import { EffectComposer, Bloom, Vignette, Noise, HueSaturation, BrightnessContrast, ToneMapping } from '@react-three/postprocessing';
+import { ToneMappingMode } from 'postprocessing';
 import { NoToneMapping, type PerspectiveCamera } from 'three';
 import { GlobeSphere } from './GlobeSphere';
 import { latLonToVector3 } from './geo';
@@ -98,13 +99,22 @@ export function Globe({ pulse, currentPoint, onSelectHelena }: GlobeProps) {
       <EffectComposer multisampling={0}>
         <Bloom
           intensity={0.6}
-          luminanceThreshold={0.6}
+          luminanceThreshold={0.5}
           luminanceSmoothing={0.25}
           mipmapBlur={quality.mipmapBlur}
           radius={0.6}
         />
+        {/* Round 7: a cinematic colour-grade pass using postprocessing
+            effects already installed but previously unused. Applied here,
+            after Bloom in the composer chain — not via renderer.toneMapping,
+            which round 3 already found clamps HDR colours before Bloom ever
+            sees them. Bloom still reads the pre-graded HDR scene colour, so
+            this doesn't reintroduce that bug. */}
+        <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
+        <HueSaturation saturation={0.18} />
+        <BrightnessContrast brightness={0.04} contrast={0.08} />
         <Noise opacity={0.018} premultiply />
-        <Vignette eskil={false} offset={0.32} darkness={0.55} />
+        <Vignette eskil={false} offset={0.32} darkness={0.32} />
       </EffectComposer>
     </Canvas>
   );
