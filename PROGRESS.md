@@ -1,7 +1,7 @@
 # Project Moana — Progress Report
 
 Last updated: 2026-08-18, branch `claude/moana-master-build-plan-v2-zjs07y`,
-HEAD `4f13739`. Working tree clean, everything below is pushed.
+HEAD `3b730d7`. Working tree clean, everything below is pushed.
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -16,36 +16,37 @@ product vision and rules; this file is the build/validation log against it.
 ## Status, one line
 
 **Phase −1 is passed (decided 2026-08-17). Phase 0's visual prototype
-(`phase-0-prototype/`) has had nine rounds of iteration — user feedback
+(`phase-0-prototype/`) has had ten rounds of iteration — user feedback
 against a reference image, an external critique evaluated on its merits,
 real Earth textures, measuring the reference instead of describing it, real
 multi-source swell physics (round 9, which also found that **the ocean
 shader had never actually animated over time in this project's history**,
-a React Three Fiber uniforms-update bug present since round 2) — and a
-tenth (§"Round 10" below) that fixed the sharp dividing lines round 9's own
-closing note had flagged, using a lateral-inhibition mechanism the user
-proposed themselves, found and fixed two further pole-singularity artifacts
-that only showed up from a rotated camera angle, and replaced the old
-noise-driven teal patches with a strength-coded light-blue-to-purple colour
-ramp that also makes each swell source's cone shape legible for free. It is
+a React Three Fiber uniforms-update bug present since round 2), lateral
+inhibition and a strength-coded colour ramp (round 10) — and an eleventh
+(§"Round 11" below) that restyled Helena's own path/marker off a hard
+opaque white line and dot (which the user disliked as a separate
+line-chart overlay) onto the same soft-gradient, no-hard-edges language and
+the same swell-strength colour ramp as the ocean field itself. It is
 functionally complete and automatically verified, but has not been shown to
-the user since round 10 landed, and still needs the plan's actual
+the user since round 11 landed, and still needs the plan's actual
 falsifiable gate — five non-surfers timed on a physical phone — which no
 agent session can run itself.**
 
 **If you're picking this up cold, read in this order:** (1) this "Status"
 section, (2) "What's next" near the bottom for the immediate action, (3)
-"Round 10" under "Phase 0" for the most recent thread (lateral inhibition,
-pole-zone spirals only visible from a rotated camera, and why the first
-purple colour picked silently failed to render as purple), (4) "Round 9"
-for the swell-physics rework and its central lesson (verify uniform updates
-actually reach the GPU by checking object identity, not by reading back the
-JS value you just set — the two can silently diverge), (5) "Round 8" for
+"Round 11" under "Phase 0" for the most recent thread (restyling Helena's
+path/marker, and an additive-blending flare bug found along the way), (4)
+"Round 10" for lateral inhibition, pole-zone spirals only visible from a
+rotated camera, and why the first purple colour picked silently failed to
+render as purple, (5) "Round 9" for the swell-physics rework and its
+central lesson (verify uniform updates actually reach the GPU by checking
+object identity, not by reading back the JS value you just set — the two
+can silently diverge), (6) "Round 8" for
 how "measure the reference, don't describe it" found a large framing error,
-(6) "Round 7" for the real-texture rework, (7) "Round 6" for how to
+(7) "Round 7" for the real-texture rework, (8) "Round 6" for how to
 evaluate an external critique without trusting or dismissing it blindly,
-(8) skim "What was built" and rounds 2–5 for context on how the visual
-engine got here. Don't start a "round 11" of self-directed visual tuning
+(9) skim "What was built" and rounds 2–5 for context on how the visual
+engine got here. Don't start a "round 12" of self-directed visual tuning
 purely on your own initiative — get a fresh look from the user first.
 
 ---
@@ -904,7 +905,70 @@ purple-cored, blue-edged wedge fanning out from its origin, and no
 pinwheel/spiral artifacts at any source's own centre across three tested
 camera orientations.
 
-### Verified, and how (current as of round 10, HEAD `4f13739`)
+### Round 11: restyling Helena's path/marker off the hard white line and dot
+
+The user's reaction to round 10's screenshots was specific: "I don't like
+the white line. And circle... the whole visualization has to be fluid
+enough for user to understand the projected path and current position
+without the ugly line." Helena's own path (`HelenaPath.tsx`) had never been
+touched by rounds 7–10's work on the ocean shader itself — it was still an
+opaque white `Line` (cobalt-to-white gradient, `lineWidth={1.1}`, normal
+blending) with a flat, opaque, unlit sphere as the current-position marker,
+predating the round-9/10 swell-strength colour language entirely. It read
+exactly as the user described: a line-chart overlay dropped onto the
+painting, not part of it — while every other piece of "where is the swell
+and how strong" information had, by round 10, moved onto soft gradients and
+a shared colour ramp.
+
+**Restyled onto the same language, not removed** — the user still wants to
+be able to read the projected path and current position, just not via a
+hard line: new shared `swellPalette.ts` (`SWELL_WEAK`/`SWELL_STRONG`,
+`#8fd6f0`/`#a855f7`) exports the exact colours `GlobeSphere.tsx`'s
+`uSwellWeak`/`uSwellStrong` uniforms already use, imported by both files so
+the two can't drift apart. Helena's trail now interpolates along this same
+ramp by each waypoint's own energy (previously an unrelated cobalt-to-white
+gradient keyed the same way but meaning nothing shared with the rest of the
+scene) — the trail now reads as one more swell in the same system, not a
+separately-coloured chart line. The marker's opaque sphere (a flat white
+circle with a hard silhouette regardless of viewing angle) is replaced with
+a camera-facing (`<Billboard>`) soft radial-glow plane, a small hand-written
+shader (`GLOW_FRAGMENT`) blending a tight core and a wide soft halo to zero
+alpha at the edge — a light source, not a drawn dot — coloured by the
+current point's own energy on the same ramp. The trail itself also now
+fades in/out over the first ~8% and last ~14% of its length (scaling vertex
+colour toward black) instead of stopping abruptly at two hard line-caps,
+and renders as two passes sharing the same points — a wide, low-opacity
+halo underneath a thin bright core — for a brushstroke feel rather than a
+single uniform stroke width.
+
+**One real bug found in testing, not assumed away:** the first version
+used `AdditiveBlending` on the trail (matching the ocean shader's own
+glow-heavy aesthetic), which produced a small blown-out flare exactly at
+the path's tip in every screenshot. Root cause: where the 3D curve bends
+toward or away from the camera, many of its sampled points project into a
+handful of screen pixels, and additive blending sums their brightness
+rather than capping it — dozens of overlapping near-transparent segments
+in the same pixels add up to a bright flare regardless of how dim any one
+of them is. Confirmed by cropping and inspecting the exact pixels (not
+just eyeballing "looks better/worse"): the flare tracked the tip precisely
+across rebuilds and disappeared entirely when blending was switched back
+to normal alpha compositing, which caps a pixel at the vertex colour
+itself instead of summing overlapping draws. Kept `AdditiveBlending` only
+on the marker's own glow billboard, which is a single small plane, not
+120+ overlapping line segments, so the same failure mode doesn't apply
+there.
+
+**Verified:** `npm run build` and `npm run lint` clean. `smoke-test.mjs`
+(both viewports — the marker's invisible hit-target mesh and `?e2e=1`
+screen-position hook are unchanged, so tap-to-open-panel and the timeline
+moving the marker both still pass), `panel-glass-test.mjs`, and
+`rotate-test.mjs` all pass with zero console errors. Visual: fresh
+screenshots at the default angle, both `rotate-test.mjs` angles, and the
+open-panel view all show a soft glowing gradient stroke fading into the
+water at both ends, a diffuse marker glow with no hard edge, and no flare
+at the path's tip.
+
+### Verified, and how (current as of round 11, HEAD `3b730d7`)
 
 No physical phone or human testers were available in this session, so
 verification stopped at what automation can actually confirm. Four scripts

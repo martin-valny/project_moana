@@ -5,7 +5,7 @@ fake swell ("Helena") crossing the North Atlantic, rendered on a cinematic
 dark globe, with a draggable timeline, tap-to-select, and local-only
 Follow.
 
-The visual engine (the globe surface itself) is on its tenth iteration.
+The visual engine (the globe surface itself) is on its eleventh iteration.
 Round 1 used a GPU particle field. Round 2 replaced it with a domain-warped
 fractal-noise shader. Round 3 fixed missing curvature shading, a dead bloom
 pipeline, and several CSS bugs. Round 4 was the first pass with the actual
@@ -27,12 +27,15 @@ filaments actual swell propagation" into real multi-source swell physics,
 and in doing so found that **the ocean shader had never actually animated
 over time in this project's history** — a React Three Fiber uniforms bug
 present since round 2, invisible in every prior round's static screenshots.
-Round 10 (current) fixed the sharp dividing lines round 9 shipped with,
-using a lateral-inhibition mechanism the user proposed themselves, found
-and fixed two further pole-singularity artifacts only visible from a
-rotated camera angle, and replaced noise-driven teal patches with a
-strength-coded light-blue-to-purple colour ramp. See "Round 7" through
-"Round 10" below.
+Round 10 fixed the sharp dividing lines round 9 shipped with, using a
+lateral-inhibition mechanism the user proposed themselves, found and fixed
+two further pole-singularity artifacts only visible from a rotated camera
+angle, and replaced noise-driven teal patches with a strength-coded
+light-blue-to-purple colour ramp. Round 11 (current) restyled Helena's own
+path and current-position marker — untouched by rounds 7–10's work on the
+ocean shader itself, and still a hard opaque white line and dot predating
+the swell-strength colour language — onto the same soft-gradient palette
+and no-hard-edges look. See "Round 7" through "Round 11" below.
 
 ## Run it
 
@@ -846,6 +849,58 @@ own origin close enough into frame. Fresh screenshots at three camera
 orientations show smooth transitions where sources' fans meet, each active
 source reading as a distinct purple-cored, blue-edged wedge, and no
 pinwheel/spiral artifacts at any source's centre.
+
+## Round 11: restyling Helena's path/marker off the hard white line and dot
+
+The user's reaction to round 10 was specific: "I don't like the white
+line. And circle... the whole visualization has to be fluid enough for
+user to understand the projected path and current position without the
+ugly line." `HelenaPath.tsx` had never been touched by rounds 7–10's work
+on the ocean shader — still an opaque white `Line` with a flat, unlit
+sphere marker, predating the swell-strength colour language entirely. It
+read exactly as described: a line-chart overlay dropped onto the painting,
+not part of it.
+
+**Restyled onto the same language, not removed** — the user still wants
+to read the projected path and current position, just not via a hard
+line. New shared `swellPalette.ts` exports the exact colours
+`GlobeSphere.tsx`'s `uSwellWeak`/`uSwellStrong` uniforms already use,
+imported by both files so they can't drift apart. Helena's trail now
+interpolates along this same ramp by each waypoint's energy, instead of an
+unrelated cobalt-to-white gradient — it reads as one more swell in the
+same system now, not a separately-coloured chart line. The marker's opaque
+sphere (a flat white circle, hard silhouette from any angle) is replaced
+with a camera-facing (`<Billboard>`) soft radial-glow plane — a small
+hand-written shader blending a tight core and a wide halo to zero alpha at
+the edge, a light source rather than a drawn dot — coloured by the current
+point's own energy on the same ramp. The trail also fades in/out over its
+first ~8% and last ~14% instead of stopping at two hard line-caps, and
+renders as a wide low-opacity halo pass underneath a thin bright core pass
+for a brushstroke feel rather than one uniform stroke.
+
+**One real bug found in testing:** the first version used
+`AdditiveBlending` on the trail, which produced a small blown-out flare
+exactly at the path's tip. Root cause: where the 3D curve bends toward or
+away from the camera, many sampled points project into a handful of
+screen pixels, and additive blending sums their brightness instead of
+capping it — dozens of overlapping near-transparent segments in the same
+pixels add up bright regardless of how dim any one is. Confirmed by
+cropping and inspecting the exact pixels rather than eyeballing "looks
+better": the flare tracked the tip precisely across rebuilds and vanished
+when blending switched to normal alpha compositing, which caps a pixel at
+the vertex colour instead of summing overlapping draws. Kept
+`AdditiveBlending` only on the marker's own glow billboard — a single
+small plane, not 120+ overlapping segments, so the failure mode doesn't
+apply there.
+
+**Verified:** `npm run build`/`npm run lint` clean; `smoke-test.mjs` (both
+viewports — the marker's hit-target and `?e2e=1` hook are unchanged, so
+tap-to-open-panel and timeline-moves-marker both still pass),
+`panel-glass-test.mjs`, `rotate-test.mjs` all pass, zero console errors.
+Fresh screenshots at the default angle, both rotate angles, and the
+open-panel view show a soft glowing gradient stroke fading into the water
+at both ends, a diffuse marker glow with no hard edge, and no flare at the
+path's tip.
 
 ## Build bugs worth knowing about (fixed, but instructive)
 
