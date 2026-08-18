@@ -50,7 +50,9 @@ await page.locator('button', { hasText: '3 Days' }).click();
 await page.waitForTimeout(500);
 await page.screenshot({ path: '/tmp/moana-phase0-4-timeline-drag.png' });
 
-await page.locator('button', { hasText: 'Data: Open-Meteo' }).click();
+// Attribution now lives behind the wordmark tap (Fix 8: no standalone
+// "Data: Open-Meteo" label in the main view any more).
+await page.locator('button', { hasText: 'MOANA.' }).click();
 await page.waitForTimeout(300);
 await page.screenshot({ path: '/tmp/moana-phase0-5-attribution.png' });
 

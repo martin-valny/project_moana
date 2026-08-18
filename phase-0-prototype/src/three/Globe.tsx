@@ -2,6 +2,7 @@ import { Suspense, useMemo } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocessing';
+import { NoToneMapping } from 'three';
 import { GlobeSphere } from './GlobeSphere';
 import { HelenaPath } from './HelenaPath';
 import { detectQualityTier } from './qualityTier';
@@ -21,11 +22,16 @@ export function Globe({ pulse, currentPoint, onSelectHelena }: GlobeProps) {
   const energy01 = normalizeEnergy(currentPoint.energy);
 
   return (
-    <Canvas camera={{ position: [0, 0.9, 7.8], fov: 42 }} gl={{ antialias: true }} dpr={quality.dpr}>
+    <Canvas
+      camera={{ position: [0, 0.9, 7.8], fov: 42 }}
+      gl={{ antialias: true, toneMapping: NoToneMapping }}
+      dpr={quality.dpr}
+    >
       <color attach="background" args={['#02040a']} />
 
       <Suspense fallback={null}>
-        <Stars radius={40} depth={20} count={1200} factor={1.1} saturation={0} fade speed={0.25} />
+        {/* Sparse, low-opacity, intentional — not scattered debug dots (Fix 8). */}
+        <Stars radius={45} depth={25} count={550} factor={0.65} saturation={0} fade speed={0.2} />
         <GlobeSphere radius={RADIUS} headingDeg={currentPoint.heading_deg} energy01={energy01} octaves={quality.octaves} />
         <HelenaPath pulse={pulse} radius={RADIUS} currentPoint={currentPoint} onSelect={onSelectHelena} />
       </Suspense>
@@ -43,11 +49,11 @@ export function Globe({ pulse, currentPoint, onSelectHelena }: GlobeProps) {
 
       <EffectComposer multisampling={0}>
         <Bloom
-          intensity={0.65}
-          luminanceThreshold={0.85}
-          luminanceSmoothing={0.15}
+          intensity={0.9}
+          luminanceThreshold={0.55}
+          luminanceSmoothing={0.2}
           mipmapBlur={quality.mipmapBlur}
-          radius={0.5}
+          radius={0.55}
         />
         <Noise opacity={0.02} premultiply />
         <Vignette eskil={false} offset={0.3} darkness={0.65} />

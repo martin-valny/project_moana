@@ -3,13 +3,25 @@
 }
 
 .wordmark {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
   margin: 0;
+  display: block;
+  pointer-events: auto;
+  cursor: pointer;
   font-family: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
   font-size: 15px;
   font-weight: 500;
   letter-spacing: 0.18em;
   color: rgba(230, 242, 248, 0.82);
   animation: riseIn 1.6s ease forwards;
+  transition: color 0.3s ease;
+}
+
+.wordmark:hover {
+  color: #faf9f4;
 }
 
 .tagline {

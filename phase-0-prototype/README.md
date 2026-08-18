@@ -5,13 +5,15 @@ fake swell ("Helena") crossing the North Atlantic, rendered on a cinematic
 dark globe, with a draggable timeline, tap-to-select, and local-only
 Follow.
 
-The visual engine (the globe surface itself) is on its second iteration.
-The first used a GPU particle field for the ambient ocean texture; it was
-replaced with a domain-warped fractal-noise shader per a corrected
-visual-engine brief — a single shader pass that reads as marbled, swirling
-cobalt/cyan ribbons rather than discrete points, matches the intended art
-direction far more closely, and is cheaper to render. See "The visual
-engine" below.
+The visual engine (the globe surface itself) is on its third iteration.
+Round 1 used a GPU particle field for the ambient ocean texture. Round 2
+replaced it with a domain-warped fractal-noise shader per a corrected
+visual-engine brief. Round 3 (current) is a remediation pass against a
+third brief that reviewed round 2's screenshots and found the sphere had
+no actual curvature-driven shading (it read as a flat map cutout), the
+bloom pipeline wasn't triggering, several UI elements had real CSS bugs,
+and the exact colour palette needed calibrating against specific hex
+values. See "The visual engine" and "Round 3: visual remediation" below.
 
 ## Run it
 
@@ -78,16 +80,27 @@ deploying the `npm run build` output, held in the hand, at night.
    position (not the built-in UV attribute) so the land mask lookup is
    guaranteed to agree with `geo.ts`'s lat/lon-to-vector3 convention used
    everywhere else in the app.
-2. If land: a flat, restrained tone — a silhouette for orientation, not a
-   map (§5.1: "barely visible... not enough to read as an atlas").
-3. If ocean: 5-octave fBm, double-domain-warped, animated by advecting
-   the sample position over time, biased by Helena's current heading and
-   scaled by her current (normalised) energy — so the flow's dominant
-   direction and how defined the ribbons look are both real data, not
-   arbitrary (§1.2). A three-stop colour ramp (near-black → cobalt → a
-   pale cyan-white authored above 1.0 so only the brightest crests trip
-   the bloom threshold) with a secondary noise sample blending in
-   occasional teal undertones.
+2. If land: a tone nearly identical to deep ocean (barely a shade
+   different), with a low-opacity coastline stroke picked out via the
+   mask's screen-space derivative (`fwidth`) — a silhouette that rewards
+   close inspection, not a map (§5.1 / brief-v3 Fix 6).
+3. If ocean: fBm double-domain-warped (capped at 3 octaves feeding the
+   warp itself so ribbons stay long and clean rather than finely
+   speckled — brief-v3 Fix 2), animated by advecting the sample position
+   over time, biased by Helena's current heading and scaled by her
+   current (normalised) energy — so the flow's dominant direction and how
+   defined the ribbons look are both real data, not arbitrary (§1.2). A
+   three-stop colour ramp (near-black → cobalt → a pale cyan-white
+   authored well above 1.0 so only the brightest crests trip the bloom
+   threshold) with a secondary noise sample blending in sparse teal
+   undertones (a minor accent, not a dominant tone).
+4. **Curvature-driven shading** (brief-v3 Fix 1): the true per-fragment
+   view direction (`normalize(-vViewPosition)`, not the camera's fixed
+   forward axis) dotted with the surface normal darkens the surface
+   toward the true geometric silhouette and stays full-bright facing the
+   camera — the piece that was missing entirely in round 2, which is why
+   it read as a flat map cutout instead of a lit sphere. The atmosphere
+   shell uses the same true-view-direction approach for its Fresnel term.
 
 **Scope note on the data bias:** Phase 0 has exactly one swell, not a
 populated field, so the flow bias is a single global vector/scalar rather
@@ -96,20 +109,28 @@ from Phase 2 onward. It's still Helena's real current values, not a
 constant — just not spatially varying yet, because there's nothing to vary
 it by.
 
-Bloom is tuned selective (`luminanceThreshold` ~0.85) so only ribbon
-crests and the atmosphere rim bloom, not the whole scene — global bloom
-was explicitly ruled out (it reads as a wash, not "premium"). A very
-subtle film-grain pass sits alongside the vignette; both are meant to be
-felt, not seen.
+Bloom is selective (`luminanceThreshold` ~0.55, tuned empirically — see
+"Round 3" below for why 0.85 caught nothing) so only ribbon crests, the
+Helena marker/arc, and the atmosphere rim bloom, not the whole scene. The
+Canvas explicitly sets `toneMapping: NoToneMapping` so HDR peak colours
+reach the bloom pass unclamped. A very subtle film-grain pass sits
+alongside the vignette; both are meant to be felt, not seen.
 
-## Attribution decision (§3.3)
+## Attribution decision (§3.3, revised in round 3)
 
-Made here, not deferred: a hairline "Data: Open-Meteo" credit sits
-permanently at the bottom-right corner (satisfies CC BY 4.0's "visible
-wherever the data is displayed" unconditionally), and tapping it opens a
-one-tap sheet with the full credit, CC BY 4.0 link, and a note that Phase 0
-itself has no live data. Both options from the plan, combined rather than
-chosen between. See `MASTER_BUILD_PLAN.md` §3.3/§11 row 17.
+A hairline "Data: Open-Meteo" credit originally sat permanently at the
+bottom-right corner. Round 3's brief flagged this as debug-looking text
+that shouldn't appear in the main experience, and Phase 0 has no live
+Open-Meteo data yet (Helena is hardcoded) so the CC BY 4.0 "visible
+wherever the data is displayed" requirement doesn't actually bite yet —
+so the standalone label was removed. The wordmark ("MOANA.") is now the
+tap target that opens the same "About the data" sheet, keeping the credit
+reachable without adding a visible element. **This needs revisiting before
+Phase 1 ships real data** — a wordmark-only affordance is a reasonable
+call for a placeholder-data prototype, not obviously enough once the app
+is actually displaying CC-licensed data; re-open this decision then rather
+than assuming it's still settled. See `MASTER_BUILD_PLAN.md` §3.3/§11 row
+17 for the original decision this revises.
 
 ## A flag worth reading (§0 rule 2: "flag, don't silently build")
 
@@ -122,6 +143,88 @@ nothing to change later, so it was left in rather than blocking on it —
 but it genuinely is a "brand asset" in spirit, and should be swapped
 before this prototype is shown outside the immediate working group, and
 certainly before anything resembling it ships.
+
+## Round 3: visual remediation
+
+A third brief reviewed round 2's screenshots and diagnosed one root cause
+("the globe isn't shaded as a real 3D sphere") plus nine secondary
+problems, each with a numbered fix and a self-check. All nine were
+addressed:
+
+1. **No curvature shading at all** — see "The visual engine" above. This
+   was the real root cause; the surface shader had zero dependence on
+   surface normal or view direction, so nothing about it could ever read
+   as a lit sphere regardless of what the ocean texture looked like.
+2. **Ribbons too speckled** — reduced the octave count feeding the domain
+   warp itself (still using the full budget for the final sample), and
+   increased warp strength, for fewer/longer/cleaner ribbon shapes.
+3. **Atmosphere read as a flat ring** — same true-view-direction fix as
+   #1, applied to the atmosphere shell's Fresnel term; also fixed an
+   inverted-range bug in the `smoothstep` (see below).
+4. **No bloom bleed** — two compounding causes: the Canvas wasn't
+   disabling three.js's default tone mapping, so HDR peak colours were
+   being clamped before the bloom pass ever saw them; and separately,
+   `luminanceThreshold` was set high enough (0.85) that almost nothing in
+   the actual rendered range crossed it. Fixed both, then re-tuned peak
+   brightness and the colour ramp's upper band so genuine "crests" have
+   enough separation from the mid-tones for a threshold to be meaningful.
+5. **Palette calibration** — applied the brief's exact hex ranges for
+   every colour stop (ocean deep/mid/bright/teal, atmosphere, land,
+   coastline, panel fill/border, text).
+6. **Land too detailed/high-contrast** — land fill dropped to nearly the
+   same tone as deep ocean; only a low-opacity coastline stroke (derived
+   from the mask's screen-space derivative, not a separate outline asset)
+   remains visible, and only on close inspection.
+7. **UI panel not genuinely translucent** — verified via a targeted test
+   (rotate the globe so a bright/detailed area sits behind the panel,
+   then screenshot): coastline shapes are visibly blurred through it, so
+   the existing `backdrop-filter: blur(22px)` + low-opacity fill was
+   already correct; no change needed here beyond confirming it.
+8. **Debug text, timeline chips, starfield** — three separate real bugs,
+   not just polish:
+   - The attribution credit's plain-text presence in the main view — see
+     "Attribution decision" above.
+   - The timeline's active label rendered as a filled pill/chip. Root
+     cause: `.stopLabel` and `.stopLabelActive` are applied as
+     alternatives (never both at once), but only `.stopLabel` reset the
+     browser's default `<button>` background/border — so the *active*
+     state was the one leaking default button chrome. Fixed by moving the
+     reset properties onto a shared selector both classes get.
+   - Starfield count/brightness turned down so it reads as sparse and
+     intentional rather than scattered debug dots.
+9. **Path arc inconsistent with the ocean palette** — recoloured to the
+   exact same deep/bright stops as the surface shader (including the same
+   HDR headroom on the bright end), so it blooms consistently with the
+   ribbon crests instead of looking like a separately-styled line
+   overlay.
+
+**A bug worth flagging on its own:** the atmosphere Fresnel fix in step 3
+initially had the `smoothstep` edges in the wrong order for the corrected
+(true per-fragment) view-direction math, which would have made the glow
+brightest on the *far* side of the shell and dimmest at the rim — the
+opposite of "brightest at the silhouette." Caught by reasoning through
+what range `dot(normal, viewDir)` actually takes for a `BackSide`-rendered
+shell (always ≤ 0, exactly 0 at the true silhouette) before trusting the
+formula, not by screenshot alone — worth being deliberately suspicious of
+sign/range assumptions in Fresnel-style shaders generally.
+
+**Two self-check scripts** (ad hoc, not part of `npm run lint`/`build`,
+kept because the brief's self-checks are worth re-running after future
+shader changes):
+
+- `rotate-test.mjs` — drags the globe to two different orientations and
+  screenshots each, for visually confirming curvature shading and rim
+  glow move correctly with orientation (Fix 1 / Fix 3's self-checks).
+- `panel-glass-test.mjs` — rotates a detailed area behind the panel's
+  screen position before opening it, to confirm the backdrop blur is
+  actually showing globe content through (Fix 7's self-check).
+
+**Not independently verified:** this remediation was tuned against the
+brief's written description and hex values, not a literal pixel-level
+comparison against the reference JPG it mentions (`46c566c2....jpg`) —
+that file wasn't available to this session. If there's a meaningful gap
+still, a direct side-by-side would catch it faster than more iteration
+against the text description alone.
 
 ## Build bugs worth knowing about (fixed, but instructive)
 

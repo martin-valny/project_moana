@@ -27,6 +27,7 @@ export default function App() {
 
   const [offsetHours, setOffsetHours] = useState(0);
   const [selected, setSelected] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
 
   const currentPoint = useMemo(() => {
     const target = new Date(startTime.getTime() + offsetHours * 60 * 60 * 1000);
@@ -41,7 +42,7 @@ export default function App() {
 
       <div className="overlay">
         <div className="topLeft">
-          <Masthead />
+          <Masthead onOpenInfo={() => setInfoOpen(true)} />
         </div>
 
         <div className="bottomCenter">
@@ -59,7 +60,7 @@ export default function App() {
         <SwellPanel pulse={pulse} shortLabel={HELENA_SHORT_LABEL} isFollowed={isFollowed} onToggleFollow={toggleFollow} />
       )}
 
-      <Attribution />
+      <Attribution open={infoOpen} onClose={() => setInfoOpen(false)} />
     </div>
   );
 }

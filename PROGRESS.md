@@ -196,6 +196,83 @@ several screenshot-compare iterations against the brief's own description
 pixel-for-pixel) before settling — consistent with the brief's own
 expectation that this takes several passes.
 
+### Round 3: visual remediation against a corrected brief
+
+The user reviewed two screenshots of the v2 rewrite above and supplied a
+third brief diagnosing one root cause and nine secondary problems, each
+with an exact fix and a self-check to run before moving on. Worked
+through in the brief's own stated order; all nine addressed:
+
+- **Root cause, confirmed real:** the surface shader had zero dependence
+  on surface normal or view direction at all — every fragment's
+  brightness came only from lat/lon position and noise, so the globe
+  could never read as a lit 3D sphere regardless of what the ocean
+  texture looked like, which is exactly why it read as a flat map cutout.
+  Fixed by adding true per-fragment view-direction shading
+  (`dot(normal, normalize(-viewSpacePosition))`, not the camera's fixed
+  forward axis) to both the surface and the atmosphere shell, so darkening
+  reaches genuine zero exactly at the true geometric silhouette at any
+  zoom level. Verified by dragging the globe to different orientations
+  and confirming the darkening/compression moves consistently with
+  orientation, not by a single static screenshot.
+- **Ribbons still too speckled:** reduced the octave count feeding the
+  domain warp itself (kept the full budget for the final sample only)
+  and increased warp strength — fewer, longer, cleaner ribbon shapes.
+- **No bloom bleed at all, a real pipeline bug:** the Canvas wasn't
+  disabling three.js's default tone mapping, so HDR peak colours were
+  being clamped before the bloom pass could ever see them — the
+  ">1.0 for bloom" technique from the v2 brief was silently defeated the
+  entire time. Fixed with `toneMapping: NoToneMapping` on the Canvas, plus
+  retuning the luminance threshold down from 0.85 (which, it turned out,
+  essentially nothing in the actual rendered range ever crossed) to ~0.55.
+- **Exact colour palette calibration:** applied the brief's specific hex
+  ranges throughout — ocean deep/mid/bright/teal, atmosphere, land,
+  coastline, panel fill/border/text.
+- **Land redone as near-invisible + a derivative-based coastline stroke**
+  instead of a solid, clearly-legible fill — a bigger reduction than a
+  simple opacity tweak.
+- **Two real UI bugs found, not just polish:**
+  - The timeline's active label rendered as a filled pill/chip because
+    `.stopLabel` and `.stopLabelActive` are mutually exclusive classes
+    (never both applied at once), but only `.stopLabel` reset the
+    browser's default `<button>` background/border — so the *active*
+    state specifically was the one leaking default button chrome. This
+    was a genuine CSS bug, not a design choice that needed revisiting.
+  - The persistent "Data: Open-Meteo" attribution label was flagged as
+    debug-looking text that shouldn't live in the main experience.
+    Removed; the wordmark now opens the same "About the data" sheet.
+    Since Phase 0 has no live data yet, this doesn't currently violate CC
+    BY 4.0 — but it's flagged in `phase-0-prototype/README.md` as needing
+    re-evaluation before Phase 1 ships real data, not treated as settled.
+- **Path arc recoloured** to the exact same palette stops (including HDR
+  headroom) as the ocean surface, so it blooms consistently instead of
+  reading as a separately-styled overlay.
+
+**A sign/range bug caught by reasoning before testing, not by screenshot:**
+fixing the atmosphere's Fresnel term to use the true view direction meant
+its old `smoothstep(0.7, -0.65, facing)` formula (tuned against the old,
+wrong, fixed-axis calculation) would have produced the *opposite* of the
+intended falloff — brightest on the far side, dimmest at the rim — because
+a `BackSide`-rendered shell's visible fragments always have `facing <= 0`,
+with exactly `0` at the true silhouette. Worked out the correct range
+analytically (`pow(clamp(1.0 + facing, 0, 1), 1.6)`) before building it,
+rather than tuning by trial and error against screenshots alone.
+
+Two small Playwright scripts were added alongside the existing smoke test,
+specifically to make the brief's own self-checks repeatable rather than
+one-off manual screenshot review: `rotate-test.mjs` (drags to two
+orientations, for confirming curvature shading/rim glow move correctly)
+and `panel-glass-test.mjs` (rotates a detailed area behind the panel
+before opening it, to confirm the backdrop blur genuinely shows content
+through). Full detail, including the complete before/after reasoning for
+each fix, is in `phase-0-prototype/README.md`'s "Round 3" section.
+
+**Not independently verified:** tuned against the brief's written
+description and hex values, not a literal pixel-comparison against the
+reference JPG it names — that file wasn't available to this session. If a
+meaningful gap remains, a direct side-by-side would be the fastest way to
+find it, faster than further iteration against the text description alone.
+
 ### Verified, and how
 
 No physical phone or human testers were available in this session, so

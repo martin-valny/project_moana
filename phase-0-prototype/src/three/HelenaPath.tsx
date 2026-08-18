@@ -13,8 +13,12 @@ interface HelenaPathProps {
   onSelect: () => void;
 }
 
-const DEEP = new THREE.Color('#134470');
-const BRIGHT = new THREE.Color(1.2, 1.4, 1.5);
+// Same palette family as the surface shader's ocean-mid/bright stops
+// (Fix 9) — the arc reads as an extension of the ribbon shader, not a
+// separately-styled line-chart overlay. BRIGHT carries the same HDR
+// headroom as the ocean's peak colour so it blooms consistently.
+const DEEP = new THREE.Color('#0f3f77');
+const BRIGHT = new THREE.Color('#e0f9ff').multiplyScalar(1.85);
 
 /**
  * Helena's path, restyled (visual-engine brief stage 6) as a thin raised
@@ -71,7 +75,7 @@ export function HelenaPath({ pulse, radius, currentPoint, onSelect }: HelenaPath
 
       <mesh ref={markerRef} position={currentPos} onClick={handleClick}>
         <sphereGeometry args={[radius * 0.01, 16, 16]} />
-        <meshBasicMaterial color="#ffffff" />
+        <meshBasicMaterial color={BRIGHT} toneMapped={false} />
       </mesh>
     </group>
   );
