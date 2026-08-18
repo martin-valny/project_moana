@@ -5,7 +5,7 @@ fake swell ("Helena") crossing the North Atlantic, rendered on a cinematic
 dark globe, with a draggable timeline, tap-to-select, and local-only
 Follow.
 
-The visual engine (the globe surface itself) is on its ninth iteration.
+The visual engine (the globe surface itself) is on its tenth iteration.
 Round 1 used a GPU particle field. Round 2 replaced it with a domain-warped
 fractal-noise shader. Round 3 fixed missing curvature shading, a dead bloom
 pipeline, and several CSS bugs. Round 4 was the first pass with the actual
@@ -22,12 +22,17 @@ naive tuning pass would never have caught. Round 8 stopped describing the
 reference and started measuring it — found the globe was framed at ~97% of
 the viewport where the reference is ~74% (a close-up, not a planet), and
 three tooling bugs, two of which meant earlier rounds' own screenshots
-weren't showing what a user would actually see. Round 9 (current) turned
-"make the filaments actual swell propagation" into real multi-source swell
-physics, and in doing so found that **the ocean shader had never actually
-animated over time in this project's history** — a React Three Fiber
-uniforms bug present since round 2, invisible in every prior round's static
-screenshots. See "Round 7", "Round 8", and "Round 9" below.
+weren't showing what a user would actually see. Round 9 turned "make the
+filaments actual swell propagation" into real multi-source swell physics,
+and in doing so found that **the ocean shader had never actually animated
+over time in this project's history** — a React Three Fiber uniforms bug
+present since round 2, invisible in every prior round's static screenshots.
+Round 10 (current) fixed the sharp dividing lines round 9 shipped with,
+using a lateral-inhibition mechanism the user proposed themselves, found
+and fixed two further pole-singularity artifacts only visible from a
+rotated camera angle, and replaced noise-driven teal patches with a
+strength-coded light-blue-to-purple colour ramp. See "Round 7" through
+"Round 10" below.
 
 ## Run it
 
@@ -769,7 +774,78 @@ pattern rather than the soft feathered look tuned elsewhere — smooth, no
 hard edges or artifacts, but more diagrammatic than photographic. It
 answers "where can this swell go" legibly, which was the actual ask;
 softening the fan-edge transition further is a reasonable future-round
-target if the user wants it less graphic.
+target if the user wants it less graphic. **Addressed in round 10.**
+
+## Round 10: lateral inhibition, pole-zone spirals, and a strength-coded colour ramp
+
+The user saw round 9's spoke pattern live and named the fix themselves —
+lateral inhibition, the strongest local swell should suppress weaker
+overlapping ones rather than blend with them — plus two more asks in the
+same message: each source should read as a legible directional cone, and
+colour should encode strength, deep purple for the strongest swell down to
+light blue for the weakest.
+
+**The seam mechanism:** `flowAccum += away * w` was a plain linear vector
+sum across sources. Where two sources have comparable weight but different
+directions, `f = normalize(flowAccum)` sweeps through a range of directions
+over a narrow spatial band as dominance flips between them — harmless for a
+colour blend, but that band feeds straight into the anisotropic noise
+stretch, and noise is chaotic with respect to its sampling direction, so
+the rotation renders as a visible seam. Fixed with the user's own proposed
+mechanism: sharpen the weight used for *direction* only
+(`wDir = pow(w, 3.0)`), so the locally-strongest source dominates instead
+of being averaged with weaker neighbours, while energy stays a true sum.
+
+**Sharpening surfaced two latent bugs a single default camera angle had
+never exposed** — both found by rotating to a different orientation:
+
+1. A pinwheel artifact at each source's own origin: `away` has the exact
+   same hairy-ball singularity `toP` did in round 9, but round 9's
+   `poleFade` fix only ever blended `spread`, never this direction — a
+   latent bug sharpening turned visible by concentrating weight exactly
+   where the direction is least defined. Fixed the same way as `spread`:
+   blend `away` toward the stable source direction within the same
+   pole-fade radius.
+2. That fix removed the point singularity but left a softer spiral in the
+   transition band around it — found only by rotating the camera to bring
+   a source's own origin into frame, which the default angle never did.
+   An energy-weighted "pole confidence" now suppresses both the
+   anisotropic stretch ratio *and* the domain-warp's direction-dependent
+   drift/evolve terms in that zone; domain warping amplifies small input
+   changes by design, so the direction's residual rotation alone was
+   enough to redraw the spiral even after the stretch ratio was already
+   fading correctly.
+
+**Colour scheme:** replaced the noise-driven teal patches
+(`snoise(vPos * 1.35 + 17.0)`, unrelated to any actual data) with a ramp
+driven by `fieldEnergy01` — already exactly the right per-fragment signal —
+from light blue to purple. This answered the "legible cone" ask for free:
+the cone shape already existed geometrically, it just rendered in nearly
+the same blue as the surrounding water; colour makes the existing shape
+visible rather than adding a second mechanism to draw one.
+
+**One real bug in the first colour pick, found by testing, not assumed:**
+`#5b2a8c` never rendered as purple anywhere — isolated with a sequence of
+throwaway debug renders (grayscale energy signal, then the blended colour,
+then the raw uniform alone) rather than re-tuning blindly. Its linear-space
+luminance is very low after `THREE.Color`'s automatic sRGB→linear
+conversion, and this pipeline's ACES filmic tonemap crushes dark, saturated
+inputs toward a desaturated navy indistinguishable from the surrounding
+water. A brighter violet (`#a855f7`) survives the same pipeline intact.
+Lesson: check a shader colour constant through the actual render pipeline,
+not just as a hex value — this stack's tonemapping is not colour-preserving
+at low luminance. Also tinted the crest/foam highlight toward the strength
+colour (it was painting flat white straight over each swell's most
+energetic point, erasing the colour signal exactly where it mattered most).
+
+**Verified:** `npm run build`/`npm run lint` clean; `smoke-test.mjs` (both
+viewports), `panel-glass-test.mjs`, `rotate-test.mjs` all pass, zero
+console errors — `rotate-test.mjs` specifically is what surfaced both
+pole-zone bugs, since the default screenshot angle never brought a source's
+own origin close enough into frame. Fresh screenshots at three camera
+orientations show smooth transitions where sources' fans meet, each active
+source reading as a distinct purple-cored, blue-edged wedge, and no
+pinwheel/spiral artifacts at any source's centre.
 
 ## Build bugs worth knowing about (fixed, but instructive)
 

@@ -1,7 +1,7 @@
 # Project Moana — Progress Report
 
 Last updated: 2026-08-18, branch `claude/moana-master-build-plan-v2-zjs07y`,
-HEAD `9e76b54`. Working tree clean, everything below is pushed.
+HEAD `4f13739`. Working tree clean, everything below is pushed.
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -16,31 +16,37 @@ product vision and rules; this file is the build/validation log against it.
 ## Status, one line
 
 **Phase −1 is passed (decided 2026-08-17). Phase 0's visual prototype
-(`phase-0-prototype/`) has had eight rounds of iteration — user feedback
+(`phase-0-prototype/`) has had nine rounds of iteration — user feedback
 against a reference image, an external critique evaluated on its merits,
-real Earth textures, measuring the reference instead of describing it — and
-a ninth (§"Round 9" below) that turned direct user feedback ("make the
-filaments actual swell propagation, not a smear") into real multi-source
-swell physics, and in the process found that **the ocean shader had never
-actually animated over time in this project's history** — a React Three
-Fiber uniforms-update bug present since round 2, invisible in every prior
-round's static screenshots. It is functionally complete and automatically
-verified, but has not been shown to the user since round 9 landed, and
-still needs the plan's actual falsifiable gate — five non-surfers timed on
-a physical phone — which no agent session can run itself.**
+real Earth textures, measuring the reference instead of describing it, real
+multi-source swell physics (round 9, which also found that **the ocean
+shader had never actually animated over time in this project's history**,
+a React Three Fiber uniforms-update bug present since round 2) — and a
+tenth (§"Round 10" below) that fixed the sharp dividing lines round 9's own
+closing note had flagged, using a lateral-inhibition mechanism the user
+proposed themselves, found and fixed two further pole-singularity artifacts
+that only showed up from a rotated camera angle, and replaced the old
+noise-driven teal patches with a strength-coded light-blue-to-purple colour
+ramp that also makes each swell source's cone shape legible for free. It is
+functionally complete and automatically verified, but has not been shown to
+the user since round 10 landed, and still needs the plan's actual
+falsifiable gate — five non-surfers timed on a physical phone — which no
+agent session can run itself.**
 
 **If you're picking this up cold, read in this order:** (1) this "Status"
 section, (2) "What's next" near the bottom for the immediate action, (3)
-"Round 9" under "Phase 0" for the most recent thread and its central lesson
-(verify uniform updates actually reach the GPU by checking object identity,
-not by reading back the JS value you just set — the two can silently
-diverge), (4) "Round 8" for how "measure the reference, don't describe it"
-found a large framing error, (5) "Round 7" for the real-texture rework,
-(6) "Round 6" for how to evaluate an external critique without trusting or
-dismissing it blindly, (7) skim "What was built" and rounds 2–5 for context
-on how the visual engine got here. Don't start a "round 10" of
-self-directed visual tuning purely on your own initiative — get a fresh
-look from the user first.
+"Round 10" under "Phase 0" for the most recent thread (lateral inhibition,
+pole-zone spirals only visible from a rotated camera, and why the first
+purple colour picked silently failed to render as purple), (4) "Round 9"
+for the swell-physics rework and its central lesson (verify uniform updates
+actually reach the GPU by checking object identity, not by reading back the
+JS value you just set — the two can silently diverge), (5) "Round 8" for
+how "measure the reference, don't describe it" found a large framing error,
+(6) "Round 7" for the real-texture rework, (7) "Round 6" for how to
+evaluate an external critique without trusting or dismissing it blindly,
+(8) skim "What was built" and rounds 2–5 for context on how the visual
+engine got here. Don't start a "round 11" of self-directed visual tuning
+purely on your own initiative — get a fresh look from the user first.
 
 ---
 
@@ -787,8 +793,118 @@ artifacts, the singularity fix holds), but more diagrammatic than
 photographic. It's a legible answer to "where can this swell go," which
 was the actual ask, but softening the fan-edge transition further is a
 reasonable target for a future round if the user wants it less graphic.
+**Addressed in round 10** — see below.
 
-### Verified, and how (current as of round 9, HEAD `9e76b54`)
+### Round 10: lateral inhibition, pole-zone spirals, and a strength-coded colour ramp
+
+Round 9's own closing note flagged it: where several sources' fans
+overlapped, the result read as a "graphic, crisp spoke pattern" rather than
+a soft transition. The user saw it live and named the mechanism themselves
+— "sometimes I think we'll need to step down a bit on reality... use some
+smart kinda 'lateral inhibition' where strongest swell inhibits smaller
+ones" — and asked for two more things in the same message: each swell
+source should read as a legible directional cone (not just a texture
+variation), and colour should encode strength, deep purple for the
+strongest swell down to light blue for the weakest.
+
+**The seam mechanism, confirmed by reading the code before changing
+anything:** `flowAccum += away * w` was a plain linear vector sum across
+sources. Where two sources have comparable weight but different `away`
+directions, `f = normalize(flowAccum)` depends sensitively on their exact
+weight ratio, sweeping through a range of directions over a narrow spatial
+band as dominance flips from one source to the other. That band feeds
+straight into the anisotropic noise stretch, and noise is chaotic with
+respect to its sampling direction — a smooth rotation of `f` renders as a
+visible seam. Fixed with the user's own proposed mechanism: sharpen the
+weight used for *direction* only (`wDir = pow(w, 3.0)`), so the locally-
+strongest source dominates instead of being averaged with weaker
+neighbours, while energy stays a true sum (overlapping swells genuinely do
+carry more combined brightness, and that part already read fine).
+
+**Sharpening surfaced two latent bugs that testing at a single default
+camera angle had never exposed**, both found by rotating to a different
+orientation and looking again rather than trusting the first screenshot:
+
+1. A pinwheel/starburst artifact at each source's own origin. `away` (the
+   outward tangent fed into `flowAccum`) has the exact same hairy-ball
+   singularity `toP` did in round 9 — bearing sweeps through its full range
+   over a tiny distance near the origin. Round 9's `poleFade` fix only ever
+   blended `spread` (the cone-test magnitude), never this direction, so it
+   was already a latent bug; sharpening concentrated weight most heavily
+   exactly at `d=0` (where `falloff` peaks), turning it into a visible
+   artifact. Fixed the same way as `spread`: blend `away` toward the stable
+   source direction `D` within the same pole-fade radius.
+2. That fix removed the point singularity but left a softer spiral/vortex
+   ring in the transition band around it, found by rotating the camera to
+   bring a source's own origin into frame (the default angle only ever
+   showed inter-source seams, never a source's own centre up close).
+   `away`'s bearing-dependence doesn't respect where `poleFade` is in its
+   ramp, so the blended direction still visibly twists across roughly
+   `d ∈ (0, 0.26)`. Rather than chase the twist itself, an energy-weighted
+   "pole confidence" (how much of the locally dominant weight comes from
+   inside some source's own pole-fade zone) now suppresses the anisotropic
+   stretch ratio *and* the domain-warp's `f`-dependent drift/evolve terms
+   in that zone — domain warping amplifies small input changes by design,
+   so `f`'s residual rotation there alone was enough to redraw the spiral
+   even after the stretch ratio itself was correctly faded to isotropic.
+   The near-origin zone now renders as a soft, non-directional cloud
+   instead of a stretched pinwheel — consistent with `spread`'s own
+   original physical framing (a storm's generation area isn't organised
+   into a direction yet).
+
+**Colour scheme:** replaced the old teal patches (`tealPatch`, a regional
+tint driven by arbitrary positional noise, `snoise(vPos * 1.35 + 17.0)`,
+unrelated to any actual swell data) with a ramp driven by `fieldEnergy01` —
+already exactly the right per-fragment signal, zero outside every source's
+footprint, rising toward each source's own weight inside it — from
+`uSwellWeak` (light blue) to `uSwellStrong` (purple). This turned out to
+answer the "legible cone" ask for free: the cone *shape* already existed
+geometrically (`spread × arrived`), it just rendered in nearly the same
+blue as the calm water around it: colour makes the existing shape visible
+rather than adding a second mechanism to draw one.
+
+**One real bug in the first version of the colour ramp, found by testing
+rather than assumed correct:** the first `uSwellStrong` picked, `#5b2a8c`,
+never showed as purple anywhere on the globe — every sample, even at
+`fieldEnergy01 ≈ 0.9`, came back a plain blue. Isolated with a sequence of
+throwaway debug renders (`color = fieldEnergy01` as grayscale to confirm
+the energy signal itself was fine; `color = midColor`; `color = uSwellStrong`
+raw) rather than re-tuning blindly: `#5b2a8c`'s linear-space luminance is
+very low (~0.06 after `THREE.Color`'s automatic sRGB→linear conversion,
+confirmed directly in Node), and this pipeline's ACES filmic tonemap —
+combined with the lighting/scatter multipliers already in the shader —
+crushes dark, saturated inputs like that toward a desaturated navy almost
+indistinguishable from the surrounding water. A brighter, more saturated
+violet (`#a855f7`) survives the same pipeline intact (confirmed: raw render
+of just that uniform shows clearly as purple at a known-ocean pixel).
+Lesson for picking any future shader colour constant here: check it through
+the actual render pipeline, not just as a hex value — this stack's
+tonemapping is not colour-preserving at low luminance.
+
+Also tuned once the colour survived: the crest/foam highlight
+(`uOceanBright`, a flat near-white) was painting straight over the
+strongest part of every swell's core — exactly where the purple should be
+most visible, since a swell's crest and its most energetic point are the
+same place. Tinted the crest highlight itself toward `swellColor`
+(`fieldEnergy01 * 0.6`) so strong-swell foam carries a violet-white cast
+instead of erasing the colour signal; the ordinary mid-tone blend also now
+scales its own penetration weight up with energy (`0.60 → 0.88`) so a
+strong swell's core reads as dominantly purple rather than a thin tinted
+veil.
+
+**Verified:** `npm run build` and `npm run lint` clean. `smoke-test.mjs`
+(both viewports), `panel-glass-test.mjs`, and `rotate-test.mjs` all pass
+with zero console errors — `rotate-test.mjs` specifically is what surfaced
+both pole-zone bugs above, since the default camera angle used for `shot.mjs`
+never brought a source's own origin close enough into frame to show them.
+Visual: fresh screenshots at the default angle and both `rotate-test.mjs`
+angles show smooth gradient transitions where multiple sources' fans meet
+(no hard dividing lines), each active source reading as a distinct
+purple-cored, blue-edged wedge fanning out from its origin, and no
+pinwheel/spiral artifacts at any source's own centre across three tested
+camera orientations.
+
+### Verified, and how (current as of round 10, HEAD `4f13739`)
 
 No physical phone or human testers were available in this session, so
 verification stopped at what automation can actually confirm. Four scripts
