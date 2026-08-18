@@ -11,33 +11,34 @@
   display: block;
   pointer-events: auto;
   cursor: pointer;
-  font-family: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
-  font-size: 15px;
-  font-weight: 500;
-  letter-spacing: 0.18em;
-  color: rgba(230, 242, 248, 0.82);
-  animation: riseIn 1.6s ease forwards;
-  transition: color 0.3s ease;
+  font-family: var(--serif);
+  font-size: clamp(20px, 1.7vw, 30px);
+  font-weight: 400;
+  letter-spacing: 0.22em;
+  color: var(--text-primary);
+  animation: riseIn 1.8s ease forwards;
+  transition: opacity 0.3s ease;
 }
 
 .wordmark:hover {
-  color: #faf9f4;
+  opacity: 0.75;
 }
 
+/* Sits clearly below and indented from the wordmark, not tucked under it. */
 .tagline {
-  margin: 7px 0 0;
-  font-family: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
-  font-style: italic;
+  margin: clamp(28px, 8vh, 96px) 0 0 clamp(0px, 2.2vw, 40px);
+  font-family: var(--serif);
   font-weight: 300;
-  font-size: 13.5px;
-  color: rgba(200, 222, 236, 0.5);
-  animation: riseIn 2.2s ease forwards;
+  font-size: clamp(15px, 1.35vw, 24px);
+  letter-spacing: 0.01em;
+  color: var(--text-muted);
+  animation: riseIn 2.6s ease forwards;
 }
 
 @keyframes riseIn {
   from {
     opacity: 0;
-    transform: translateY(-3px);
+    transform: translateY(-4px);
   }
   to {
     opacity: 1;

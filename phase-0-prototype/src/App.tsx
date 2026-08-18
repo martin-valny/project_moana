@@ -5,7 +5,7 @@ import { Timeline } from './components/Timeline';
 import { SwellPanel } from './components/SwellPanel';
 import { Attribution } from './components/Attribution';
 import { useFollow } from './hooks/useFollow';
-import { buildHelenaPulse, HELENA_MAX_OFFSET_HOURS, HELENA_MIN_OFFSET_HOURS, HELENA_SHORT_LABEL } from './data/helena';
+import { buildHelenaPulse, HELENA_MAX_OFFSET_HOURS, HELENA_MIN_OFFSET_HOURS, shortLabelFor } from './data/helena';
 import { interpolatePulseAt } from './data/interpolate';
 import './App.css';
 
@@ -57,7 +57,7 @@ export default function App() {
       </div>
 
       {selected && (
-        <SwellPanel pulse={pulse} shortLabel={HELENA_SHORT_LABEL} isFollowed={isFollowed} onToggleFollow={toggleFollow} />
+        <SwellPanel pulse={pulse} shortLabel={shortLabelFor(currentPoint.heading_deg)} isFollowed={isFollowed} onToggleFollow={toggleFollow} />
       )}
 
       <Attribution open={infoOpen} onClose={() => setInfoOpen(false)} />

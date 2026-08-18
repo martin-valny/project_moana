@@ -68,16 +68,29 @@ export function Timeline({ hours, minHours, maxHours, stops, onChange }: Timelin
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
       >
+        {stops.map((stop) => (
+          <div
+            key={`tick-${stop.label}`}
+            className={styles.tick}
+            style={{ left: `${((stop.hours - minHours) / (maxHours - minHours)) * 100}%` }}
+          />
+        ))}
         <div className={styles.fill} style={{ width: percent }} />
         <div className={styles.dot} style={{ left: percent }} />
       </div>
       <div className={styles.stops}>
-        {stops.map((stop) => (
+        {stops.map((stop, i) => (
           <button
             key={stop.label}
             type="button"
             className={Math.abs(stop.hours - hours) < SNAP_WINDOW_HOURS ? styles.stopLabelActive : styles.stopLabel}
-            style={{ left: `${((stop.hours - minHours) / (maxHours - minHours)) * 100}%` }}
+            style={{
+              left: `${((stop.hours - minHours) / (maxHours - minHours)) * 100}%`,
+              // End labels anchor to their own edge rather than centring on
+              // the tick, so they neither overflow the track nor collide with
+              // their neighbour on a narrow phone viewport.
+              transform: i === 0 ? 'none' : i === stops.length - 1 ? 'translateX(-100%)' : 'translateX(-50%)',
+            }}
             onClick={() => onChange(stop.hours)}
           >
             {stop.label}

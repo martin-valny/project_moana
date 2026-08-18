@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useFrame, useLoader } from '@react-three/fiber';
 import * as THREE from 'three';
+import { latLonToVector3 } from './geo';
 import { SIMPLEX_NOISE_GLSL } from './shaders/noise';
 import { FBM_GLSL } from './shaders/fbm';
 
@@ -37,69 +38,93 @@ const SURFACE_FRAGMENT = /* glsl */ `
   uniform vec3 uOceanMid;
   uniform vec3 uOceanBright; // authored >1.0 so only ribbon crests trip the bloom threshold
   uniform vec3 uOceanTeal;
+  uniform vec3 uScatterColor;
 
   ${SIMPLEX_NOISE_GLSL}
   ${FBM_GLSL}
 
+  // Must agree exactly with geo.ts's latLonToVector3, which the swell path
+  // and marker use. An earlier version added +0.5 here, which offset the
+  // land mask by a full 180 degrees of longitude — the continents rendered
+  // antipodally, so Helena's North Atlantic path appeared to cross the
+  // Pacific. (wrapS is RepeatWrapping, so negative u wraps correctly.)
   vec2 posToUv(vec3 p) {
     float phi = acos(clamp(p.y, -1.0, 1.0));
     float theta = atan(p.z, -p.x);
-    return vec2(theta / (2.0 * 3.14159265) + 0.5, phi / 3.14159265);
+    return vec2(theta / (2.0 * 3.14159265), phi / 3.14159265);
   }
 
   void main() {
     vec2 uv = posToUv(vPos);
-    float land = texture2D(uLandMask, uv).r;
-    // Low-opacity coastline stroke only, per the brief's exact spec
-    // (rgba(150,170,190,0.12) at most) — not a crisp visible line at
-    // normal viewing distance.
-    float coastEdge = smoothstep(0.02, 0.22, fwidth(land) * 6.0) * 0.16;
+    // The mask is pre-blurred (see scripts/generate-land-mask.mjs), so it
+    // arrives as a smooth 0..1 field rather than hard 0/1. That lets the
+    // coastline be a narrow band around the 0.5 contour — thin and smooth
+    // at any zoom — instead of fwidth() on a hard mask, which produced the
+    // jagged stair-stepped outlines of the previous round.
+    float m = texture2D(uLandMask, uv).r;
+    float stroke = smoothstep(0.30, 0.5, m) * smoothstep(0.70, 0.5, m) * 0.10;
 
     vec3 color;
 
-    if (land > 0.5) {
-      // Nearly the same tone as deep ocean, only a hair warmer — a
-      // silhouette that rewards close inspection, not a map (§5.1/Fix 6).
-      color = mix(uLandColor, uCoastColor, coastEdge);
+    if (m > 0.5) {
+      // Barely distinguishable from deep ocean — a silhouette that rewards
+      // close inspection, never a map (§5.1).
+      color = uLandColor;
     } else {
-      color = mix(uOceanDeep, uCoastColor, coastEdge * 0.6);
+      // --- Anisotropic noise domain -----------------------------------
+      // The single most important line in this shader. Splitting the sample
+      // position into components along and across the flow direction and
+      // scaling them unequally makes features ~8x longer along the flow
+      // than across it. Sampling isotropically (as previous rounds did)
+      // can only ever produce curly, equal-sided blobs — no colour-ramp or
+      // threshold tuning turns those into long streaks.
+      vec3 f = normalize(uFlowBias);
+      vec3 along = dot(vPos, f) * f;
+      vec3 across = vPos - along;
+      vec3 coord = along * 0.2 + across * 2.0;
 
-      float t = uTime * 0.02;
-      vec3 flowed = vPos * 1.15 + uFlowBias * t;
+      // Travel along the flow, plus a slow independent evolution so the
+      // field never reads as a rigid texture sliding past.
+      coord += f * (uTime * 0.025);
+      vec3 evolve = f * 0.15 + vec3(uTime * 0.009);
 
-      // Fewer octaves feeding the warp itself keeps ribbons long and
-      // clean rather than finely speckled (Fix 2); the final sample still
-      // uses the full octave budget for a touch of fine detail on top.
-      float n = warpedFbm(flowed, min(uOctaves, 3), 1.5, uFlowBias * 0.4);
-      n = n * (0.7 + uEnergy01 * 0.95);
+      // Moderate warp: enough for gentle S-curves and feathering, not so
+      // much that it curls the streaks back into noodles.
+      float n = warpedFbm(coord * 0.95, min(uOctaves, 3), 0.45, evolve);
+      n += fbm(coord * 3.0, min(uOctaves, 3)) * 0.06; // wispy edge detail
+      n *= 0.75 + uEnergy01 * 0.9;                    // energy drives contrast
 
-      // Mostly near-black, generous negative space: only the higher end
-      // of the noise range lights up, so the field reads as a calm dark
-      // ocean with a small number of bright ribbons, not a busy marbled
-      // surface or scattered speckle.
-      float lo = smoothstep(0.1, 0.44, n);
-      float mid = smoothstep(0.44, 0.66, n);
-      float hi = smoothstep(0.66, 0.9, n);
+      // Broad soft bands with a small bright core. Two failure modes to
+      // stay between: a threshold low enough to light the whole sphere
+      // (flat blue ball), and a ridged/contour transform, which gives
+      // thin wiry filaments rather than the reference's feathery wisps.
+      float band = smoothstep(-0.08, 0.42, n);
+      float crest = smoothstep(0.32, 0.64, n);
+      crest = pow(crest, 1.8);
 
-      vec3 oceanColor = mix(uOceanDeep, uOceanMid, lo);
-      float tealMix = smoothstep(0.2, 0.45, snoise(flowed * 0.5 + 11.0)) * 0.3; // sparse accent only
-      oceanColor = mix(oceanColor, uOceanTeal, mid * tealMix);
-      oceanColor = mix(oceanColor, uOceanMid, mid * (1.0 - tealMix));
-      oceanColor = mix(oceanColor, uOceanBright, hi);
+      // Teal shows up as broad regional patches, as in the reference —
+      // low frequency and tied to position, not to the ribbon noise.
+      float tealPatch = smoothstep(0.25, 0.7, snoise(vPos * 0.55 + 17.0));
 
-      color = mix(color, oceanColor, 1.0 - coastEdge * 0.6);
+      vec3 oceanColor = uOceanDeep;
+      oceanColor = mix(oceanColor, uOceanTeal, tealPatch * band * 0.3);
+      oceanColor = mix(oceanColor, uOceanMid, band * (1.0 - tealPatch * 0.4) * 0.85);
+      oceanColor = mix(oceanColor, uOceanBright, crest * 0.34);
+
+      color = oceanColor;
     }
 
-    // Fix 1: the missing piece — real curvature-driven shading, using the
-    // true per-fragment view direction (not the camera's fixed forward
-    // axis) so the darkening reaches genuine zero exactly at the true
-    // geometric silhouette, at any zoom level. Facing the camera head-on
-    // reads full brightness; toward the silhouette the surface darkens
-    // and compresses, like a lit sphere, not a flat map cutout.
+    color = mix(color, uCoastColor, stroke);
+
+    // Curvature-driven shading from the true per-fragment view direction.
+    // Previous round darkened the limb almost to black, which read as a
+    // dark ball sitting inside a separate glowing ring. A real lit planet
+    // does the opposite at the edge: mild surface falloff, then additive
+    // atmospheric scattering that peaks exactly at the silhouette.
     vec3 viewDir = normalize(-vViewPosition);
-    float facing = dot(normalize(vViewNormal), viewDir);
-    float limb = mix(0.08, 1.0, smoothstep(0.0, 0.6, facing));
-    color *= limb;
+    float facing = clamp(dot(normalize(vViewNormal), viewDir), 0.0, 1.0);
+    color *= mix(0.5, 1.0, smoothstep(0.0, 0.55, facing));
+    color += uScatterColor * pow(1.0 - facing, 2.2) * 0.6;
 
     gl_FragColor = vec4(color, 1.0);
   }
@@ -125,16 +150,17 @@ const ATMOSPHERE_FRAGMENT = /* glsl */ `
     // This shell is rendered BackSide, so every visible fragment has
     // facing <= 0 by construction (0 exactly at the true silhouette,
     // more negative further round the far side) — remap that to a 0..1
-    // glow that is brightest exactly at the silhouette and fades
-    // smoothly, never a flat/uniform-width ring (Fix 3).
+    // glow brightest at the silhouette, never a flat/uniform ring.
     float facing = dot(normalize(vNormal), viewDir);
-    float fresnel = pow(clamp(1.0 + facing, 0.0, 1.0), 1.6);
-    gl_FragColor = vec4(uColor, fresnel * 0.6);
+    float fresnel = pow(clamp(1.0 + facing, 0.0, 1.0), 2.4);
+    gl_FragColor = vec4(uColor, fresnel * 0.42);
   }
 `;
 
 interface GlobeSphereProps {
   radius: number;
+  lat: number;
+  lon: number;
   headingDeg: number;
   energy01: number;
   octaves?: number;
@@ -143,8 +169,8 @@ interface GlobeSphereProps {
 /**
  * The globe: a real (if deliberately coarse) coastline mask for
  * orientation per §5.1, and the domain-warped fBm "swell surface" that
- * replaces Phase 0's earlier particle field — see the visual-engine brief
- * for why. Both share one shader pass so they're always in registration.
+ * replaces Phase 0's earlier particle field. Both share one shader pass
+ * so they're always in registration.
  *
  * Scope note: Phase 0 has exactly one swell (Helena), not a populated
  * field, so `uFlowBias`/`uEnergy01` are a single global bias rather than
@@ -152,17 +178,37 @@ interface GlobeSphereProps {
  * from Phase 2 onward. Truthful-not-decorative (§1.2) is still honoured —
  * the bias is Helena's real current heading/energy, not an arbitrary
  * constant — it just isn't spatially varying yet because there's nothing
- * to vary it by.
+ * to vary it by. The ribbons therefore run along her real travel
+ * direction, which is what makes the anisotropy above meaningful rather
+ * than merely decorative.
  */
-export function GlobeSphere({ radius, headingDeg, energy01, octaves = 5 }: GlobeSphereProps) {
+export function GlobeSphere({ radius, lat, lon, headingDeg, energy01, octaves = 5 }: GlobeSphereProps) {
   const landMask = useLoader(THREE.TextureLoader, '/textures/land-mask.png');
   landMask.wrapS = THREE.RepeatWrapping;
   landMask.colorSpace = THREE.NoColorSpace;
+  landMask.minFilter = THREE.LinearMipmapLinearFilter;
+  landMask.magFilter = THREE.LinearFilter;
+  landMask.generateMipmaps = true;
+  landMask.anisotropy = 4;
 
+  // A compass bearing is only meaningful relative to a position: the same
+  // bearing points in a different 3D direction at every point on the globe.
+  // Build the real surface-tangent vector at Helena's current location by
+  // differencing the sphere mapping, then combining local north/east by the
+  // bearing. The previous version collapsed every bearing into the equatorial
+  // plane, which is why the ribbons always ran dead horizontal regardless of
+  // where Helena was or which way she was heading.
   const flowBias = useMemo(() => {
-    const rad = (headingDeg * Math.PI) / 180;
-    return new THREE.Vector3(Math.sin(rad), 0, -Math.cos(rad));
-  }, [headingDeg]);
+    const eps = 0.35;
+    const here = latLonToVector3(lat, lon, 1);
+    const north = latLonToVector3(lat + eps, lon, 1).sub(here).normalize();
+    const east = latLonToVector3(lat, lon + eps, 1).sub(here).normalize();
+    const bearing = (headingDeg * Math.PI) / 180;
+    return north
+      .multiplyScalar(Math.cos(bearing))
+      .add(east.multiplyScalar(Math.sin(bearing)))
+      .normalize();
+  }, [lat, lon, headingDeg]);
 
   const surfaceUniforms = useMemo(
     () => ({
@@ -171,17 +217,13 @@ export function GlobeSphere({ radius, headingDeg, energy01, octaves = 5 }: Globe
       uFlowBias: { value: flowBias },
       uEnergy01: { value: energy01 },
       uOctaves: { value: octaves },
-      // Visual-remediation brief §3 — exact hex values, land/coast/deep/mid/
-      // teal/atmosphere used as-is; the bloom-triggering peak is built from
-      // the spec's near-white hex with headroom multiplied on top (brief:
-      // "authored ABOVE standard 0-1 RGB range... or bloom will have
-      // nothing to catch regardless of threshold").
-      uLandColor: { value: new THREE.Color('#0c1017') },
-      uCoastColor: { value: new THREE.Color('#96aabe') },
-      uOceanDeep: { value: new THREE.Color('#040814') },
-      uOceanMid: { value: new THREE.Color('#0f3f77') },
-      uOceanBright: { value: new THREE.Color('#e0f9ff').multiplyScalar(1.85) },
-      uOceanTeal: { value: new THREE.Color('#215f56') },
+      uLandColor: { value: new THREE.Color('#0a1524') },
+      uCoastColor: { value: new THREE.Color('#9fb4c6') },
+      uOceanDeep: { value: new THREE.Color('#071528') },
+      uOceanMid: { value: new THREE.Color('#1a5aa4') },
+      uOceanBright: { value: new THREE.Color('#e6fbff').multiplyScalar(1.9) },
+      uOceanTeal: { value: new THREE.Color('#1d6b62') },
+      uScatterColor: { value: new THREE.Color('#4d9fc4') },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [landMask],
@@ -196,7 +238,7 @@ export function GlobeSphere({ radius, headingDeg, energy01, octaves = 5 }: Globe
 
   const atmosphereUniforms = useMemo(
     () => ({
-      uColor: { value: new THREE.Color('#58c4d8') },
+      uColor: { value: new THREE.Color('#9fd8e8') },
     }),
     [],
   );
@@ -207,7 +249,7 @@ export function GlobeSphere({ radius, headingDeg, energy01, octaves = 5 }: Globe
         <sphereGeometry args={[radius, 128, 128]} />
         <shaderMaterial vertexShader={SURFACE_VERTEX} fragmentShader={SURFACE_FRAGMENT} uniforms={surfaceUniforms} />
       </mesh>
-      <mesh scale={1.06}>
+      <mesh scale={1.1}>
         <sphereGeometry args={[radius, 64, 64]} />
         <shaderMaterial
           vertexShader={ATMOSPHERE_VERTEX}

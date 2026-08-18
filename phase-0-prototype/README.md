@@ -5,15 +5,13 @@ fake swell ("Helena") crossing the North Atlantic, rendered on a cinematic
 dark globe, with a draggable timeline, tap-to-select, and local-only
 Follow.
 
-The visual engine (the globe surface itself) is on its third iteration.
-Round 1 used a GPU particle field for the ambient ocean texture. Round 2
-replaced it with a domain-warped fractal-noise shader per a corrected
-visual-engine brief. Round 3 (current) is a remediation pass against a
-third brief that reviewed round 2's screenshots and found the sphere had
-no actual curvature-driven shading (it read as a flat map cutout), the
-bloom pipeline wasn't triggering, several UI elements had real CSS bugs,
-and the exact colour palette needed calibrating against specific hex
-values. See "The visual engine" and "Round 3: visual remediation" below.
+The visual engine (the globe surface itself) is on its fourth iteration.
+Round 1 used a GPU particle field. Round 2 replaced it with a domain-warped
+fractal-noise shader. Round 3 fixed missing curvature shading, a dead bloom
+pipeline, and several CSS bugs. Round 4 (current) is the first pass with the
+actual reference image in hand rather than a written description of it — see
+"Round 4: working from the reference" below, which is also where the three
+real bugs that pass uncovered are written up.
 
 ## Run it
 
@@ -60,17 +58,18 @@ deploying the `npm run build` output, held in the hand, at night.
     isn't worth it for this).
 - `src/components/` — `Masthead` (wordmark + tagline, top-left),
   `Timeline` (thin draggable timeline, Now/Tomorrow/3 Days as labelled
-  snap points, not the only reachable positions), `SwellPanel` (the
-  right-side glass panel: name, one uppercase descriptor, Follow —
-  deliberately nothing else), `Attribution` (§3.3 decision — see below).
+  snap points, not the only reachable positions), `SwellPanel` (right-side
+  detail: name, one uppercase descriptor, path arc, Follow — no card or
+  panel background, just a hairline rule), `Attribution` (§3.3 — see below).
 - `src/hooks/useFollow.ts` — Follow persistence via `localStorage`, the
   web stand-in for §9.2's AsyncStorage requirement (same key/shape,
   trivial swap when this ports to Expo).
 - `scripts/generate-land-mask.mjs` — one-time asset generator, not part of
   the app build. Rasterizes `world-atlas`'s real 110m land topology into
-  `public/textures/land-mask.png` (1024×512, single channel) via a plain
-  scanline polygon fill — no native canvas dependency. Re-run it if the
-  mask ever needs regenerating; the output is otherwise checked in.
+  `public/textures/land-mask.png` (2048×1024, single channel) via a plain
+  scanline polygon fill — no native canvas dependency — then box-blurs it so
+  the shader can derive a smooth coastline contour. Re-run it if the mask
+  ever needs regenerating; the output is otherwise checked in.
 
 ## The visual engine
 
@@ -81,26 +80,29 @@ deploying the `npm run build` output, held in the hand, at night.
    guaranteed to agree with `geo.ts`'s lat/lon-to-vector3 convention used
    everywhere else in the app.
 2. If land: a tone nearly identical to deep ocean (barely a shade
-   different), with a low-opacity coastline stroke picked out via the
-   mask's screen-space derivative (`fwidth`) — a silhouette that rewards
-   close inspection, not a map (§5.1 / brief-v3 Fix 6).
-3. If ocean: fBm double-domain-warped (capped at 3 octaves feeding the
-   warp itself so ribbons stay long and clean rather than finely
-   speckled — brief-v3 Fix 2), animated by advecting the sample position
-   over time, biased by Helena's current heading and scaled by her
-   current (normalised) energy — so the flow's dominant direction and how
-   defined the ribbons look are both real data, not arbitrary (§1.2). A
+   different), with a low-opacity coastline stroke taken as a narrow band
+   around the blurred mask's 0.5 contour — a silhouette that rewards close
+   inspection, not a map (§5.1).
+3. If ocean: the sample position is first split along/across the flow
+   direction and scaled unequally, so features run ~10x longer along the
+   flow than across it — this anisotropy is what makes ribbons rather than
+   curls, and no amount of colour tuning substitutes for it. That
+   coordinate then feeds double-domain-warped fBm, advected over time,
+   biased by Helena's real current heading and scaled by her current
+   (normalised) energy, so both the dominant flow direction and how
+   defined the ribbons look are real data, not arbitrary (§1.2). A
    three-stop colour ramp (near-black → cobalt → a pale cyan-white
    authored well above 1.0 so only the brightest crests trip the bloom
-   threshold) with a secondary noise sample blending in sparse teal
-   undertones (a minor accent, not a dominant tone).
-4. **Curvature-driven shading** (brief-v3 Fix 1): the true per-fragment
-   view direction (`normalize(-vViewPosition)`, not the camera's fixed
-   forward axis) dotted with the surface normal darkens the surface
-   toward the true geometric silhouette and stays full-bright facing the
-   camera — the piece that was missing entirely in round 2, which is why
-   it read as a flat map cutout instead of a lit sphere. The atmosphere
-   shell uses the same true-view-direction approach for its Fresnel term.
+   threshold), with a secondary low-frequency sample adding sparse teal
+   patches (a minor accent, never a dominant tone).
+4. **Curvature-driven shading**: the true per-fragment view direction
+   (`normalize(-vViewPosition)`, not the camera's fixed forward axis)
+   dotted with the surface normal. Round 2 had no such term at all, which
+   is why the globe read as a flat map cutout; round 3 added it but
+   darkened the limb nearly to black, which read as a dark ball inside a
+   ring. It is now mild falloff plus an *additive* scattering term peaking
+   at the silhouette, so the edge is luminous. The atmosphere shell uses
+   the same true-view-direction approach for its Fresnel term.
 
 **Scope note on the data bias:** Phase 0 has exactly one swell, not a
 populated field, so the flow bias is a single global vector/scalar rather
@@ -109,7 +111,7 @@ from Phase 2 onward. It's still Helena's real current values, not a
 constant — just not spatially varying yet, because there's nothing to vary
 it by.
 
-Bloom is selective (`luminanceThreshold` ~0.55, tuned empirically — see
+Bloom is selective (`luminanceThreshold` ~0.6, tuned empirically — see
 "Round 3" below for why 0.85 caught nothing) so only ribbon crests, the
 Helena marker/arc, and the atmosphere rim bloom, not the whole scene. The
 Canvas explicitly sets `toneMapping: NoToneMapping` so HDR peak colours
@@ -123,7 +125,7 @@ bottom-right corner. Round 3's brief flagged this as debug-looking text
 that shouldn't appear in the main experience, and Phase 0 has no live
 Open-Meteo data yet (Helena is hardcoded) so the CC BY 4.0 "visible
 wherever the data is displayed" requirement doesn't actually bite yet —
-so the standalone label was removed. The wordmark ("MOANA.") is now the
+so the standalone label was removed. The wordmark ("MOANA") is now the
 tap target that opens the same "About the data" sheet, keeping the credit
 reachable without adding a visible element. **This needs revisiting before
 Phase 1 ships real data** — a wordmark-only affordance is a reasonable
@@ -134,7 +136,7 @@ than assuming it's still settled. See `MASTER_BUILD_PLAN.md` §3.3/§11 row
 
 ## A flag worth reading (§0 rule 2: "flag, don't silently build")
 
-`Masthead` renders the literal text "MOANA." as a wordmark, because the
+`Masthead` renders the literal text "MOANA" as a wordmark, because the
 reference image and brief specified it. `MASTER_BUILD_PLAN.md` §12.1 is
 explicit that "Moana" is an internal codename only, not clear for logos,
 brand assets, domains, or store listings. A plain text string in a
@@ -208,16 +210,17 @@ shell (always ≤ 0, exactly 0 at the true silhouette) before trusting the
 formula, not by screenshot alone — worth being deliberately suspicious of
 sign/range assumptions in Fresnel-style shaders generally.
 
-**Two self-check scripts** (ad hoc, not part of `npm run lint`/`build`,
-kept because the brief's self-checks are worth re-running after future
-shader changes):
+**Self-check scripts** (ad hoc, not part of `npm run lint`/`build`, kept
+because these checks are worth re-running after any shader change):
 
+- `shot.mjs` — one landscape + one portrait screenshot, for eyeballing the
+  visual against the reference. The fastest loop while tuning.
 - `rotate-test.mjs` — drags the globe to two different orientations and
-  screenshots each, for visually confirming curvature shading and rim
-  glow move correctly with orientation (Fix 1 / Fix 3's self-checks).
-- `panel-glass-test.mjs` — rotates a detailed area behind the panel's
-  screen position before opening it, to confirm the backdrop blur is
-  actually showing globe content through (Fix 7's self-check).
+  screenshots each, for confirming curvature shading and rim glow move
+  correctly with orientation.
+- `panel-glass-test.mjs` — rotates a bright, detailed area behind the
+  panel before opening it, to confirm the scrim stays faint enough to see
+  the globe through.
 
 **Not independently verified:** this remediation was tuned against the
 brief's written description and hex values, not a literal pixel-level
@@ -225,6 +228,90 @@ comparison against the reference JPG it mentions (`46c566c2....jpg`) —
 that file wasn't available to this session. If there's a meaningful gap
 still, a direct side-by-side would catch it faster than more iteration
 against the text description alone.
+
+## Round 4: working from the reference
+
+Rounds 1–3 were tuned against *prose* ("long silky ribbons"). With the
+reference image available, most of the remaining gap turned out to be
+structural rather than a matter of tuning:
+
+1. **The noise was isotropic.** "Long silky ribbons" had been implemented as
+   curls with equal extent in every direction, at small scale. No colour-ramp
+   or threshold change can elongate a shape. The fix is to split the sample
+   position into components along and across the flow direction and scale
+   them unequally (`along * 0.2 + across * 2.0`), so features run ~10x longer
+   along the flow than across it. This is the single line that matters most
+   in the whole shader.
+2. **Feature scale was ~5x too small** — corrected alongside the anisotropy,
+   since bigger isotropic blobs are not an improvement.
+3. **Limb lighting was inverted.** Round 3 darkened the limb almost to black
+   (floor 0.08) and put a saturated shell around it, so the globe read as a
+   dark ball inside a floating ring. A lit planet does the opposite at the
+   edge: mild surface falloff plus *additive* atmospheric scattering peaking
+   at the silhouette. Base ocean was lifted at the same time.
+4. **Framing was wrong in an unobvious way.** The reference shows a globe
+   that fills the frame *and* a near-full hemisphere of geography. Only a
+   long lens gives both: a wide FOV pulled in close also fills the frame, but
+   crops to a small patch with heavy perspective. FOV is now 8°, with camera
+   distance derived per-aspect (see `FillFrameCamera`) so one rule covers
+   desktop landscape and phone portrait.
+5. **Banding shape.** Two failure modes bracket the target and both were
+   visited on the way: a threshold low enough to light the whole sphere
+   (flat blue ball), and a ridged/contour transform (thin wiry filaments,
+   like chrome). The reference's feathery wisps sit between them — broad
+   soft `smoothstep` bands with a small, rare bright core.
+
+### Three real bugs this pass uncovered
+
+- **The land mask was rendered 180° out in longitude.** `posToUv()` added
+  `+0.5` to the computed `u`, offsetting the texture by half its width, so
+  every continent drew at its antipode. Helena's North Atlantic path was
+  therefore rendering over the Pacific. It went unnoticed for two rounds
+  because the mask is deliberately faint and abstract — there was nothing
+  obviously "wrong" to look at until the camera was pointed at a specific
+  named ocean. Caught by checking the mapping numerically against
+  `geo.ts`'s `latLonToVector3` rather than by eye.
+- **Helena's `heading_deg` contradicted her own path.** The hand-written
+  literals said ~100° (ESE) while the waypoints run ~62° (ENE). Anything
+  consuming heading — most visibly the shader's flow direction — pointed the
+  wrong way. Heading is now *derived* from consecutive waypoints, so the two
+  cannot desync.
+- **The panel described a swell the data did not contain.** `'Long-period
+  WNW pulse'` was a hardcoded string; a swell travelling ENE arrives *from*
+  the WSW. Both the panel label and the narrative description are now
+  derived from the bearing via `originSector()`.
+
+### Also in this pass
+
+- **Typography**: Cormorant Garamond (a Didone-family serif) via Google
+  Fonts, with the Georgia/Palatino stack retained as fallback. *Note for the
+  Expo port: React Native cannot use a `<link>` — bundle the font file with
+  `expo-font` instead.*
+- **The panel is no longer a panel.** Per the reference: no card, no border
+  box, no frosted glass. A thin vertical hairline is the only structural
+  mark, over a scrim faint enough to keep the globe visible through it. This
+  supersedes round 3's Fix 7, which had asked for frosted glass.
+- **Land mask** regenerated at 2048×1024 with a box blur, so the coastline
+  can be a smooth band around the 0.5 contour instead of `fwidth()` on a hard
+  0/1 mask (which produced the previous rounds' stair-stepped outlines).
+- **Idle rotation now respects `prefers-reduced-motion`** — an accessibility
+  fix that also makes the scene deterministic for the automated checks.
+- **`?e2e=1` test hook.** The app publishes Helena's projected marker
+  position on `window` when that flag is present (off by default). Sweeping
+  screen coordinates to find the marker is not viable here: under software
+  GL every synthetic click waits on a rendered frame, so a grid search takes
+  minutes.
+
+### Verification limits, stated plainly
+
+- Screenshots taken in this environment show the **Georgia fallback, not
+  Cormorant Garamond** — Chromium cannot reach `fonts.googleapis.com` through
+  the sandbox proxy (curl can; the browser's CONNECT is reset). The `<link>`
+  is correct and loads normally on a real machine, but the typography has not
+  been visually verified here.
+- Tuning was done against the reference image by eye. It is a painted/AI
+  mockup, so exact ribbon shapes are not reproducible; the target was
+  matching character — elongation, scale, softness, luminosity, framing.
 
 ## Build bugs worth knowing about (fixed, but instructive)
 

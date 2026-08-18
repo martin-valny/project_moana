@@ -47,10 +47,29 @@ export function HelenaPath({ pulse, radius, currentPoint, onSelect }: HelenaPath
 
   const currentPos = useMemo(() => latLonToVector3(currentPoint.lat, currentPoint.lon, radius * 1.01), [currentPoint, radius]);
 
+  // Off by default; the automated checks opt in with ?e2e=1. Hunting for a
+  // moving 3D marker by sweeping screen coordinates is far too slow when
+  // every synthetic click waits on a software-rendered WebGL frame.
+  const exposeMarker = useMemo(
+    () => new URLSearchParams(window.location.search).has('e2e'),
+    [],
+  );
+
   useFrame((state) => {
     const pulseScale = 1 + Math.sin(state.clock.elapsedTime * 1.6) * 0.18;
     if (markerRef.current) markerRef.current.scale.setScalar(pulseScale);
     if (glowRef.current) glowRef.current.scale.setScalar(pulseScale * 1.6);
+
+    if (exposeMarker) {
+      const ndc = currentPos.clone().project(state.camera);
+      const toCamera = state.camera.position.clone().sub(currentPos);
+      (window as unknown as Record<string, unknown>).__moanaMarker = {
+        x: (ndc.x * 0.5 + 0.5) * state.size.width,
+        y: (-ndc.y * 0.5 + 0.5) * state.size.height,
+        // Facing the camera (i.e. on the near side of the globe, not occluded).
+        facing: currentPos.dot(toCamera) > 0,
+      };
+    }
   });
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
@@ -60,7 +79,7 @@ export function HelenaPath({ pulse, radius, currentPoint, onSelect }: HelenaPath
 
   return (
     <group>
-      <Line points={trailPoints} vertexColors={trailColors} lineWidth={1.8} transparent opacity={0.85} />
+      <Line points={trailPoints} vertexColors={trailColors} lineWidth={1.1} transparent opacity={0.45} />
 
       {/* Larger invisible hit target so the marker is easy to tap on a phone. */}
       <mesh position={currentPos} onClick={handleClick}>
@@ -69,12 +88,12 @@ export function HelenaPath({ pulse, radius, currentPoint, onSelect }: HelenaPath
       </mesh>
 
       <mesh ref={glowRef} position={currentPos}>
-        <sphereGeometry args={[radius * 0.02, 16, 16]} />
-        <meshBasicMaterial color={BRIGHT} transparent opacity={0.3} depthWrite={false} blending={THREE.AdditiveBlending} />
+        <sphereGeometry args={[radius * 0.011, 16, 16]} />
+        <meshBasicMaterial color={BRIGHT} transparent opacity={0.22} depthWrite={false} blending={THREE.AdditiveBlending} />
       </mesh>
 
       <mesh ref={markerRef} position={currentPos} onClick={handleClick}>
-        <sphereGeometry args={[radius * 0.01, 16, 16]} />
+        <sphereGeometry args={[radius * 0.0052, 16, 16]} />
         <meshBasicMaterial color={BRIGHT} toneMapped={false} />
       </mesh>
     </group>

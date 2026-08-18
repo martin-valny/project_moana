@@ -15,12 +15,12 @@
 }
 
 .topLeft {
-  padding: max(22px, env(safe-area-inset-top)) 0 0 22px;
+  padding: max(26px, env(safe-area-inset-top)) 0 0 clamp(22px, 2.6vw, 52px);
 }
 
 .bottomCenter {
   margin-top: auto;
   display: flex;
   justify-content: center;
-  padding: 0 20px max(22px, env(safe-area-inset-bottom));
+  padding: 0 20px max(30px, env(safe-area-inset-bottom));
 }

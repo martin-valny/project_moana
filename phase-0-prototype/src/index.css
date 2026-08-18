@@ -1,6 +1,16 @@
 :root {
   color-scheme: dark;
   font: 16px/1.5 -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  /* Didone-family display serif, with a system fallback so the layout still
+     holds if the webfont fails to load. */
+  --serif: 'Cormorant Garamond', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+  --sans: -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  --text-primary: #f2f1ec;
+  --text-muted: #a8bac9;
+  --text-faint: rgba(168, 186, 201, 0.55);
+  --hairline: rgba(180, 210, 230, 0.15);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

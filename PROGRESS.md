@@ -273,6 +273,64 @@ reference JPG it names — that file wasn't available to this session. If a
 meaningful gap remains, a direct side-by-side would be the fastest way to
 find it, faster than further iteration against the text description alone.
 
+### Round 4: first pass with the actual reference image
+
+The user supplied the reference image itself (rounds 1–3 had only prose
+descriptions of it). Most of the remaining gap turned out to be structural,
+not a matter of tuning — full detail in `phase-0-prototype/README.md`'s
+"Round 4" section; the short version:
+
+- **The noise was isotropic.** "Long silky ribbons" had been built as curls
+  of equal extent in every direction. Splitting the sample position into
+  components along and across the flow and scaling them unequally (~10:1) is
+  what actually produces ribbons; no colour-ramp or threshold change can.
+- **Limb lighting was inverted** — round 3 darkened the limb nearly to black,
+  so the globe read as a dark ball inside a floating ring. Replaced with mild
+  falloff plus additive scattering peaking at the silhouette.
+- **Framing needed a long lens, not a close camera.** The reference fills the
+  frame *and* shows a near-full hemisphere; only a narrow FOV at distance
+  gives both. Now 8° FOV with distance derived per aspect ratio, so one rule
+  covers desktop landscape and phone portrait.
+- **Banding shape** was bracketed by two failure modes, both visited on the
+  way: a low threshold floods the sphere into a flat blue ball, and a
+  ridged/contour transform gives thin wiry filaments (chrome, not ocean).
+
+**Three real bugs surfaced, none of which were cosmetic:**
+
+1. **The land mask rendered 180° out in longitude.** `posToUv()` added `+0.5`
+   to `u`, offsetting the texture by half its width, so every continent drew
+   at its antipode — Helena's North Atlantic path was rendering over the
+   Pacific. It survived two rounds because the mask is deliberately faint and
+   abstract; there was nothing obviously wrong to look at until the camera
+   was aimed at a specific named ocean. Found by checking the mapping
+   numerically against `geo.ts`'s `latLonToVector3`, not by eye.
+2. **Helena's `heading_deg` contradicted her own path** — hand-written
+   literals said ~100° (ESE) while the waypoints run ~62° (ENE), so every
+   consumer of heading pointed the wrong way. Heading is now derived from
+   consecutive waypoints and cannot desync.
+3. **The panel described a swell the data did not contain** — `'Long-period
+   WNW pulse'` was hardcoded, but a swell travelling ENE arrives *from* the
+   WSW. Label and narrative are now derived from the bearing.
+
+Also: Cormorant Garamond via Google Fonts (Georgia fallback retained; noted
+that the Expo port must bundle the file via `expo-font` instead); the panel
+rebuilt as hairline-plus-scrim with no card or glass fill (superseding round
+3's Fix 7, per the reference and confirmed with the user); land mask
+regenerated at 2048×1024 with a blur so coastlines are a smooth contour band
+rather than `fwidth()` stair-steps; idle rotation now respects
+`prefers-reduced-motion` (an accessibility fix that also makes the scene
+deterministic for tests); and an opt-in `?e2e=1` hook that publishes the
+marker's projected position, because under software GL each synthetic click
+waits on a rendered frame and a coordinate sweep takes minutes.
+
+**Stated limits of this round's verification:** screenshots taken in this
+environment show the Georgia fallback, not Cormorant Garamond — Chromium
+cannot reach `fonts.googleapis.com` through the sandbox proxy (curl can; the
+browser's CONNECT is reset), so the typography is unverified here even though
+the `<link>` is correct. And tuning was by eye against a painted/AI reference,
+so the target was matching character — elongation, scale, softness,
+luminosity, framing — not exact ribbon shapes.
+
 ### Verified, and how
 
 No physical phone or human testers were available in this session, so

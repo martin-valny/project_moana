@@ -2,15 +2,21 @@
 /**
  * One-time asset generator, not part of the app build/runtime.
  *
- * Rasterizes world-atlas's 110m land topology into a low-res, single-channel
- * equirectangular PNG (public/textures/land-mask.png) — a real coastline
- * silhouette, but deliberately coarse (per MASTER_BUILD_PLAN.md §5.1: "enough
- * for orientation, not enough to read as an atlas"), and rasterized with a
- * plain scanline polygon fill so it doesn't need a native canvas dependency.
+ * Rasterizes world-atlas's 110m land topology into a low-res equirectangular
+ * PNG (public/textures/land-mask.png) — real coastlines, but deliberately
+ * coarse (per MASTER_BUILD_PLAN.md §5.1: "enough for orientation, not enough
+ * to read as an atlas"), rasterized with a plain scanline polygon fill so it
+ * needs no native canvas dependency.
+ *
+ * The result is then BLURRED. That matters: the shader derives its coastline
+ * stroke from a narrow band around the 0.5 contour, which requires a smooth
+ * 0..1 field. An unblurred hard 0/1 mask (what earlier rounds shipped) forces
+ * the shader to use fwidth() instead, and that produces visibly jagged,
+ * stair-stepped outlines.
  *
  * Pixel (x, y) -> lon = x/width*360-180, lat = 90-y/height*180 — the standard
  * equirectangular layout matching src/three/geo.ts's latLonToVector3, which
- * itself matches THREE.SphereGeometry's default UV mapping.
+ * itself matches the shader's posToUv().
  *
  * Re-run with: node scripts/generate-land-mask.mjs
  */
@@ -21,8 +27,10 @@ import { PNG } from 'pngjs';
 import { feature } from 'topojson-client';
 import topology from 'world-atlas/land-110m.json' with { type: 'json' };
 
-const WIDTH = 1024;
-const HEIGHT = 512;
+const WIDTH = 2048;
+const HEIGHT = 1024;
+const BLUR_RADIUS = 1;
+const BLUR_PASSES = 3;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const outPath = path.join(__dirname, '../public/textures/land-mask.png');
@@ -41,12 +49,11 @@ function collectRings(geometry) {
 
 const rings = geo.features.flatMap((f) => collectRings(f.geometry));
 
-// Convert to pixel space once.
 const pixelRings = rings.map((ring) =>
   ring.map(([lon, lat]) => [((lon + 180) / 360) * WIDTH, ((90 - lat) / 180) * HEIGHT]),
 );
 
-const mask = new Uint8Array(WIDTH * HEIGHT); // 0 = ocean, 1 = land
+let mask = new Float32Array(WIDTH * HEIGHT); // 0 = ocean, 1 = land
 
 // Standard scanline polygon fill, one ring at a time (landmasses don't
 // overlap, so per-ring fill is equivalent to a combined even-odd fill).
@@ -78,13 +85,47 @@ for (const ring of pixelRings) {
   }
 }
 
-const png = new PNG({ width: WIDTH, height: HEIGHT, colorType: 0 }); // greyscale
+const landPixels = mask.reduce((sum, v) => sum + (v > 0.5 ? 1 : 0), 0);
+
+/** Separable box blur. X wraps (equirectangular); Y clamps at the poles. */
+function boxBlur(src) {
+  const tmp = new Float32Array(src.length);
+  const out = new Float32Array(src.length);
+  const span = BLUR_RADIUS * 2 + 1;
+
+  for (let y = 0; y < HEIGHT; y++) {
+    for (let x = 0; x < WIDTH; x++) {
+      let sum = 0;
+      for (let d = -BLUR_RADIUS; d <= BLUR_RADIUS; d++) {
+        sum += src[y * WIDTH + ((x + d + WIDTH) % WIDTH)];
+      }
+      tmp[y * WIDTH + x] = sum / span;
+    }
+  }
+
+  for (let y = 0; y < HEIGHT; y++) {
+    for (let x = 0; x < WIDTH; x++) {
+      let sum = 0;
+      for (let d = -BLUR_RADIUS; d <= BLUR_RADIUS; d++) {
+        const yy = Math.min(HEIGHT - 1, Math.max(0, y + d));
+        sum += tmp[yy * WIDTH + x];
+      }
+      out[y * WIDTH + x] = sum / span;
+    }
+  }
+
+  return out;
+}
+
+for (let i = 0; i < BLUR_PASSES; i++) mask = boxBlur(mask);
+
+const png = new PNG({ width: WIDTH, height: HEIGHT, colorType: 0 });
 for (let i = 0; i < mask.length; i++) {
-  png.data[i] = mask[i] ? 255 : 0;
+  png.data[i] = Math.round(Math.min(1, Math.max(0, mask[i])) * 255);
 }
 
 writeFileSync(outPath, PNG.sync.write(png, { colorType: 0, inputColorType: 0, bitDepth: 8 }));
 
-const landPixels = mask.reduce((sum, v) => sum + v, 0);
 console.log(`Wrote ${outPath}`);
 console.log(`${WIDTH}x${HEIGHT}, land coverage: ${((landPixels / mask.length) * 100).toFixed(1)}%`);
+console.log(`blurred: radius ${BLUR_RADIUS}, ${BLUR_PASSES} passes`);

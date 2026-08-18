@@ -1,63 +1,93 @@
+// Interaction regression check for the Phase 0 prototype. This is NOT the
+// human test — §8's five-non-surfers gate is a separate, manual thing.
+//
+//   npm run build && npm run preview -- --port 4173 & node smoke-test.mjs
 import { chromium } from 'playwright';
 
+// ?e2e=1 makes the app publish Helena's projected marker position on window.
+// Sweeping screen coordinates to find it is not viable: under software GL
+// every synthetic click waits on a rendered frame, so a grid search takes
+// minutes per viewport.
+const URL = 'http://127.0.0.1:4173/?e2e=1';
+
+// The webfont comes from fonts.googleapis.com, which this sandbox's browser
+// cannot reach (curl can; Chromium's CONNECT is reset by the proxy). It loads
+// normally on a real machine — screenshots here show the Georgia fallback.
+const ignorable = (t) => t.includes('fonts.googleapis.com') || t.includes('ERR_CONNECTION_RESET');
+
 const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
-const page = await browser.newPage({ viewport: { width: 430, height: 932 } });
+const results = [];
 
-const errors = [];
-page.on('console', (msg) => {
-  if (msg.type() === 'error') errors.push(msg.text());
-});
-page.on('pageerror', (err) => errors.push(String(err)));
+for (const [name, viewport] of [
+  ['landscape', { width: 1600, height: 900 }],
+  ['portrait', { width: 430, height: 932 }],
+]) {
+  // Reduced motion stops idle rotation, so the marker holds still.
+  const page = await browser.newPage({ viewport, reducedMotion: 'reduce' });
+  const errors = [];
+  page.on('console', (m) => m.type() === 'error' && !ignorable(m.text()) && errors.push(m.text()));
+  page.on('pageerror', (e) => !ignorable(String(e)) && errors.push(String(e)));
 
-await page.goto('http://127.0.0.1:4173/', { waitUntil: 'networkidle' });
-await page.waitForTimeout(1500);
-await page.screenshot({ path: '/tmp/moana-phase0-1-initial.png' });
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(1800);
+  await page.screenshot({ path: `/tmp/moana-${name}-1-initial.png` });
 
-const canvas = await page.$('canvas');
-const box = await canvas.boundingBox();
+  const marker = await page.evaluate(() => window.__moanaMarker ?? null);
+  if (marker?.facing) {
+    await page.mouse.click(marker.x, marker.y);
+    await page.waitForTimeout(500);
+  }
+  const panelOpened = await page.locator('h2', { hasText: 'Helena' }).isVisible().catch(() => false);
+  await page.screenshot({ path: `/tmp/moana-${name}-2-panel.png` });
 
-const candidates = [
-  [0.955, 0.245],
-  [0.94, 0.25],
-  [0.96, 0.26],
-  [0.945, 0.24],
-  [0.95, 0.255],
-];
+  let followed = null;
+  if (panelOpened) {
+    await page.locator('button', { hasText: 'Follow Swell' }).click({ timeout: 8000 });
+    await page.waitForTimeout(300);
+    followed = await page.evaluate(() => localStorage.getItem('moana.swellDiary.followedIds'));
+    await page.screenshot({ path: `/tmp/moana-${name}-3-followed.png` });
+  }
 
-let panelVisible = false;
-for (const [fx, fy] of candidates) {
-  await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
-  await page.waitForTimeout(250);
-  panelVisible = await page
-    .locator('h2', { hasText: 'Helena' })
-    .isVisible()
-    .catch(() => false);
-  if (panelVisible) break;
+  // Timeline: jumping to "3 Days" must move Helena's rendered position.
+  const posBefore = await page.evaluate(() => window.__moanaMarker?.x ?? null);
+  await page.locator('button', { hasText: '3 Days' }).click({ timeout: 8000 });
+  await page.waitForTimeout(700);
+  const posAfter = await page.evaluate(() => window.__moanaMarker?.x ?? null);
+  await page.screenshot({ path: `/tmp/moana-${name}-4-timeline.png` });
+
+  // Attribution lives behind the wordmark — no standalone credit in the view.
+  const strayCredit = await page.locator('text=Data: Open-Meteo').count();
+  await page.locator('button', { hasText: 'MOANA' }).click({ timeout: 8000 });
+  await page.waitForTimeout(400);
+  const aboutVisible = await page.locator('h3', { hasText: 'About the data' }).isVisible().catch(() => false);
+  await page.screenshot({ path: `/tmp/moana-${name}-5-about.png` });
+
+  results.push({
+    name,
+    panelOpened,
+    followed,
+    timelineMoved: posBefore !== null && posAfter !== null && Math.abs(posAfter - posBefore) > 2,
+    aboutVisible,
+    strayCredit: strayCredit > 0,
+    errors,
+  });
+  await page.close();
 }
 
-await page.screenshot({ path: '/tmp/moana-phase0-2-panel.png' });
-
-if (panelVisible) {
-  await page.locator('button', { hasText: 'Follow Swell' }).click();
-  await page.waitForTimeout(200);
+let ok = true;
+for (const r of results) {
+  const pass =
+    r.panelOpened &&
+    r.followed === '["helena-phase0"]' &&
+    r.timelineMoved &&
+    r.aboutVisible &&
+    !r.strayCredit &&
+    r.errors.length === 0;
+  ok &&= pass;
+  console.log(
+    `${pass ? 'PASS' : 'FAIL'} ${r.name.padEnd(9)} panel=${r.panelOpened} follow=${r.followed} timelineMoved=${r.timelineMoved} about=${r.aboutVisible} strayCredit=${r.strayCredit} errors=${r.errors.length ? JSON.stringify(r.errors) : 0}`,
+  );
 }
-const followedStorage = await page.evaluate(() => localStorage.getItem('moana.swellDiary.followedIds'));
-await page.screenshot({ path: '/tmp/moana-phase0-3-followed.png' });
-
-// Jump the timeline to "3 Days" via its label (exercises the same
-// onChange path a drag would, without relying on synthetic drag timing).
-await page.locator('button', { hasText: '3 Days' }).click();
-await page.waitForTimeout(500);
-await page.screenshot({ path: '/tmp/moana-phase0-4-timeline-drag.png' });
-
-// Attribution now lives behind the wordmark tap (Fix 8: no standalone
-// "Data: Open-Meteo" label in the main view any more).
-await page.locator('button', { hasText: 'MOANA.' }).click();
-await page.waitForTimeout(300);
-await page.screenshot({ path: '/tmp/moana-phase0-5-attribution.png' });
-
-console.log('panel visible after click:', panelVisible);
-console.log('localStorage after Follow:', followedStorage);
-console.log('console/page errors:', JSON.stringify(errors, null, 2));
 
 await browser.close();
+process.exit(ok ? 0 : 1);

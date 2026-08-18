@@ -15,7 +15,7 @@ export function Masthead({ onOpenInfo }: MastheadProps) {
   return (
     <div className={styles.wrap}>
       <button type="button" className={styles.wordmark} onClick={onOpenInfo}>
-        MOANA.
+        MOANA
       </button>
       <p className={styles.tagline}>The ocean is moving.</p>
     </div>

@@ -1,35 +1,28 @@
+// Confirms the swell panel's scrim stays faint enough to see the globe
+// through it — the panel is deliberately not a solid card, so the failure
+// mode to catch is a scrim heavy enough to read as one.
 import { chromium } from 'playwright';
 
 const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
-const page = await browser.newPage({ viewport: { width: 430, height: 932 } });
-await page.goto('http://127.0.0.1:4173/', { waitUntil: 'networkidle' });
-await page.waitForTimeout(1200);
+const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, reducedMotion: 'reduce' });
+await page.goto('http://127.0.0.1:4173/?e2e=1', { waitUntil: 'networkidle' });
+await page.waitForTimeout(1800);
 
-const canvas = await page.$('canvas');
-const box = await canvas.boundingBox();
-const cx = box.x + box.width / 2;
-const cy = box.y + box.height / 2;
+const marker = await page.evaluate(() => window.__moanaMarker ?? null);
+if (marker?.facing) {
+  await page.mouse.click(marker.x, marker.y);
+  await page.waitForTimeout(600);
+}
+const open = await page.locator('h2', { hasText: 'Helena' }).isVisible().catch(() => false);
 
-// Rotate so a bright ribbon area sits roughly where the right panel will be.
-await page.mouse.move(cx, cy);
+// Drag a bright, detailed region behind where the panel sits, then look.
+const box = await (await page.$('canvas')).boundingBox();
+await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
 await page.mouse.down();
-await page.mouse.move(cx - 120, cy + 40, { steps: 15 });
+await page.mouse.move(box.x + box.width * 0.28, box.y + box.height * 0.45, { steps: 14 });
 await page.mouse.up();
-await page.waitForTimeout(300);
+await page.waitForTimeout(700);
+await page.screenshot({ path: '/tmp/moana-panel-scrim.png' });
 
-// Open the panel via the marker (search nearby since it moved with rotation).
-const candidates = [];
-for (let fx = 0.3; fx <= 0.95; fx += 0.05) {
-  for (let fy = 0.15; fy <= 0.5; fy += 0.05) candidates.push([fx, fy]);
-}
-let panelVisible = false;
-for (const [fx, fy] of candidates) {
-  await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
-  await page.waitForTimeout(120);
-  panelVisible = await page.locator('h2', { hasText: 'Helena' }).isVisible().catch(() => false);
-  if (panelVisible) break;
-}
-await page.waitForTimeout(400);
-await page.screenshot({ path: '/tmp/moana-panel-glass.png' });
-console.log('panel visible:', panelVisible);
+console.log('panel open:', open, '— inspect /tmp/moana-panel-scrim.png: globe detail must remain visible behind the text');
 await browser.close();
