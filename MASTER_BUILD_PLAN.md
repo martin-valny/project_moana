@@ -340,7 +340,7 @@ Goal: prove the aesthetic feels genuinely special before any data engineering.
 - Author in a browser for iteration speed (§5.2); judge on a physical phone.
 - Hard-code one fake swell path ("Helena") crossing the North Atlantic as local TypeScript data.
 - Full cinematic globe, minimal UI per §3.
-- Time scrubber (Now / Tomorrow / 3 Days) moves the hard-coded path's displayed position only.
+- Time scrubber (Now / Tomorrow / 3 Days) moves the hard-coded path's displayed position only. **Superseded, decision-log row 18:** round 9 of the prototype's visual iteration deliberately extended the scrubber to also advance a multi-source swell-propagation field (still entirely hardcoded/invented data, no live ingestion), at the user's direct request, because a single global flow direction was reading as "smeared" ocean texture rather than current. The scrubber still moves nothing about Helena's own path logic; it now additionally advances each source's front.
 - **Follow** persists locally (AsyncStorage). No backend.
 - Decide the attribution treatment (§3.3) here.
 
@@ -475,6 +475,7 @@ narrative_description
 | 15 | **Brand name deferred** | "Moana" is Disney territory. Nothing in Phase 0 depends on the name; codename and brand needn't match. Deferring costs nothing and avoids five turns of naming before any code exists. |
 | 16 | **Groundswell threshold revised 12s → 11s; Phase −1 passed** | Real-event Phase −1 validation (§12.2) across five events, two ocean regions: North Atlantic storms consistently needed period≥11s to track as one system for 72h+; a genuinely powerful Pacific crossing passed at the original ≥12s with large margins. Reads as event strength, not a wrong threshold — revised deliberately, not tuned after one failure, per §8's own anti-p-hacking design (write criteria down before looking at results). |
 | 17 | **Attribution treatment: hairline credit + one-tap sheet, combined** | §3.3 offered two options as alternatives; built Phase 0 with both — the hairline satisfies the legal "visible wherever displayed" bar unconditionally, the tap-through sheet gives room for the full CC BY 4.0 text and links without permanent chrome. See `phase-0-prototype/src/components/Attribution.tsx`. |
+| 18 | **Timeline scrubber extended to drive the whole swell field, not just Helena's marker** | §8's original Phase 0 spec constrained the scrubber to Helena's position only. The user asked directly for the ocean's flow texture to represent real swell propagation ("where the swells can potentially go") rather than one arbitrary global direction, which also happened to be the root cause of feedback that the ocean looked "smeared." Implementing that meant the scrubber's `offsetHours` had to reach the field itself. Still zero live data — `swellSources.ts`'s five additional storms are invented, same standing as Helena. See `PROGRESS.md`'s round-9 entry. |
 
 ---
 

@@ -5,7 +5,7 @@ fake swell ("Helena") crossing the North Atlantic, rendered on a cinematic
 dark globe, with a draggable timeline, tap-to-select, and local-only
 Follow.
 
-The visual engine (the globe surface itself) is on its seventh iteration.
+The visual engine (the globe surface itself) is on its ninth iteration.
 Round 1 used a GPU particle field. Round 2 replaced it with a domain-warped
 fractal-noise shader. Round 3 fixed missing curvature shading, a dead bloom
 pipeline, and several CSS bugs. Round 4 was the first pass with the actual
@@ -15,13 +15,19 @@ itself — the globe had curvature but no actual light, which read as "obvious"
 shading rather than a lit 3D object. Round 6 evaluated an external "visual
 fix pack" against the real build, rejected 4 of its 5 claims as
 stale/inapplicable, and fixed the one real issue it found (a
-straight-segment swell path, now a true spline). Round 7 (current) — after
-the user posted the actual reference image directly and rejected another
-round of pure parameter tuning — replaced flat procedural land/ocean colour
-with real Earth texture data, and fixed two real bugs a naive tuning pass
-would never have caught (a too-gentle land-luminance curve leaking a bright
-satellite-photo look, and a blend-chain bug that made every teal-weight
-increase a no-op). See "Round 5", "Round 6", and "Round 7" below.
+straight-segment swell path, now a true spline). Round 7 replaced flat
+procedural land/ocean colour with real Earth texture data after the user
+rejected another round of pure parameter tuning, and fixed two real bugs a
+naive tuning pass would never have caught. Round 8 stopped describing the
+reference and started measuring it — found the globe was framed at ~97% of
+the viewport where the reference is ~74% (a close-up, not a planet), and
+three tooling bugs, two of which meant earlier rounds' own screenshots
+weren't showing what a user would actually see. Round 9 (current) turned
+"make the filaments actual swell propagation" into real multi-source swell
+physics, and in doing so found that **the ocean shader had never actually
+animated over time in this project's history** — a React Three Fiber
+uniforms bug present since round 2, invisible in every prior round's static
+screenshots. See "Round 7", "Round 8", and "Round 9" below.
 
 ## Run it
 
@@ -662,6 +668,108 @@ but a real-time procedural fBm shader will not land on it exactly. The
 remaining gap is mostly filament fineness and the photographic quality of
 the atmosphere, and closing it further needs the user pointing at specific
 differences rather than more self-directed tuning.
+
+## Round 9: real swell propagation, and the ocean had never actually animated
+
+The user asked four things about round 8 at once: why the ocean looked
+"kinda smeared," why the atmosphere had "no transitions," whether the
+continents were over-detailed, and — the substantial one — whether the
+filament pattern could be actual swell propagation, showing where each
+swell can potentially go, rather than decoration.
+
+**Why it was smeared:** the shader never visualised currents at all.
+`uFlowBias` was one global direction (Helena's own compass heading) applied
+to the entire planet — every fragment stretched the same way, which is
+exactly what "smeared" describes. Two quick real fixes alongside it: the
+atmosphere's Fresnel term was inverted (brightest at the shell's outer
+edge, fading inward, then hard-cut at the geometry boundary — the opposite
+of a real halo), normalised against the limb angle instead so it peaks at
+the planet's edge and fades outward; land's luminance lift pulled back from
+round 8's level, which read as more detail than §5.1 wants for
+orientation-only continents.
+
+**The real feature:** several invented storm sources
+(`src/data/swellSources.ts`) alongside Helena, each radiating a directional
+great-circle fan using `Cg = 1.56 × period` — the same formula
+`phase-1-validation/physics.py`'s `group_velocity_kmh` already uses,
+deliberately kept identical rather than inventing a second number for the
+same physics. The ocean branch loops over up to 6 sources per fragment:
+front arrival (soft leading edge — swell fills in behind a front, it
+doesn't vanish ahead of it), a ~60°-wide directional spread around each
+storm's real heading, and distance falloff, then feeds the energy-weighted
+result into the *existing* anisotropic sampling (rounds 2/4's engineering,
+untouched) and total energy into contrast. Anisotropy dropped from ~10:1 to
+~5:1 — direction genuinely varying by position needs less stretch to read
+as flow than one constant ever could. This deliberately supersedes
+`MASTER_BUILD_PLAN.md` §8's "scrubber moves only Helena's marker"
+constraint — recorded as decision-log row 18, still zero live data.
+
+**Bug 1 — a sharp diamond artifact at each source's own origin.**
+"Direction away from a point on a sphere" has a genuine singularity
+exactly at that point (the hairy-ball problem): bearing rotates
+arbitrarily fast in the immediate neighbourhood, and the directional-spread
+test — correct everywhere else — cut a visible pie-slice there. Fixed by
+blending the spread test toward omnidirectional within ~15° of each
+source's origin, which is physically reasonable too: a storm's generation
+area isn't strongly directional yet, only the swell radiating away from it
+organizes into one.
+
+**Bug 2, the significant one — the timeline scrub did not visibly change
+the field, at all.** Found only because this round demanded a specific,
+falsifiable check — screenshot "Now" and "3 Days," diff the pixels —
+instead of eyeballing two renders side by side. The result: **exactly
+zero** differing ocean pixels, even though the JS-side computation was
+verified correct at every step along the way (console-logged
+`frontArray` values changed correctly with `offsetHours`; the assignment
+to the uniform's `.value` was confirmed immediately after to hold the new
+numbers). Every signal reachable from inside the React code said this was
+working.
+
+The actual cause, found only by comparing object identity directly in a
+running page (`materialRef.current.uniforms.uSourceFront ===
+surfaceUniforms.uSourceFront` → **false**): React Three Fiber's
+`<shaderMaterial uniforms={x}>` clones the uniforms object once, when the
+prop is first applied — `material.uniforms` is never a live reference to
+the object passed in. Every uniform update in this file, since round 2
+introduced this shader, mutated the original JS object's `.value`, which
+is a copy the renderer never reads again after mount. Confirmed
+unambiguously: `materialRef.current.uniforms.uTime.value` read `0` on a
+running page, and still read `0` three seconds later. **The ocean has
+never actually animated over time in this project's history** — every
+screenshot in every round happened to look like a plausible static frame
+of a complex noise field, and no round's own verification ever compared
+the same fixed camera angle at two different timestamps to catch it. Fixed
+by mutating the material's own uniforms through a `ref` instead of the
+object that was only ever good for setting *initial* values via the JSX
+prop.
+
+**The first fix attempt was wrong, instructively.** The symptom looked
+exactly like a stale closure — `useFrame`'s callback holding an old
+`frontArray` — and a debug log seemed to confirm it. Switching that update
+from `useFrame` to a `useEffect` with explicit dependencies was a real
+improvement in its own right (kept), but re-testing afterward showed the
+field still wasn't responding: the theory explained the symptom
+plausibly but wasn't the actual cause. Only the object-identity check
+found the real one. Lesson worth keeping: when a value you just set
+doesn't seem to take effect, verify by reading it back from the actual
+consumer — the material three.js is drawing with — not from the variable
+you set it on. The two can silently be different objects.
+
+**Verified post-fix:** camera held fixed (autorotate off), 27% of ocean
+pixels differ across a 5-second window purely from `uTime` animation
+(0% before the fix). Between "Now" and "3 Days," 20% of ocean pixels
+(excluding all UI regions) differ (0% before, checked with generous wait
+times up to 12s to rule out this sandbox's documented render slowness as a
+confound). `smoke-test.mjs`, `panel-glass-test.mjs`, `rotate-test.mjs` all
+still pass, zero console errors.
+
+**Not fully polished:** where several sources' fans overlap at "3 Days"'
+larger front sizes, the result reads as a fairly graphic, crisp "spoke"
+pattern rather than the soft feathered look tuned elsewhere — smooth, no
+hard edges or artifacts, but more diagrammatic than photographic. It
+answers "where can this swell go" legibly, which was the actual ask;
+softening the fan-edge transition further is a reasonable future-round
+target if the user wants it less graphic.
 
 ## Build bugs worth knowing about (fixed, but instructive)
 

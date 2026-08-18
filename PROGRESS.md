@@ -1,7 +1,7 @@
 # Project Moana — Progress Report
 
 Last updated: 2026-08-18, branch `claude/moana-master-build-plan-v2-zjs07y`,
-HEAD `349f4fb`. Working tree clean, everything below is pushed.
+HEAD `9e76b54`. Working tree clean, everything below is pushed.
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -16,31 +16,31 @@ product vision and rules; this file is the build/validation log against it.
 ## Status, one line
 
 **Phase −1 is passed (decided 2026-08-17). Phase 0's visual prototype
-(`phase-0-prototype/`) has had five rounds of direct user feedback against a
-reference image, a sixth round reviewing an external "visual fix pack," a
-seventh that replaced flat procedural colour with real Earth texture data,
-and an eighth (§"Round 8" below) that *measured* the reference rather than
-describing it — correcting a large framing error (the globe was rendered at
-~97% of frame width where the reference is ~74%) and fixing three bugs,
-two of which meant earlier rounds' screenshots were not showing what a user
-would actually see. It is functionally complete and automatically verified,
-but has not been shown to the user since round 8 landed, and still needs the
-plan's actual falsifiable gate — five non-surfers timed on a physical phone
-— which no agent session can run itself.**
+(`phase-0-prototype/`) has had eight rounds of iteration — user feedback
+against a reference image, an external critique evaluated on its merits,
+real Earth textures, measuring the reference instead of describing it — and
+a ninth (§"Round 9" below) that turned direct user feedback ("make the
+filaments actual swell propagation, not a smear") into real multi-source
+swell physics, and in the process found that **the ocean shader had never
+actually animated over time in this project's history** — a React Three
+Fiber uniforms-update bug present since round 2, invisible in every prior
+round's static screenshots. It is functionally complete and automatically
+verified, but has not been shown to the user since round 9 landed, and
+still needs the plan's actual falsifiable gate — five non-surfers timed on
+a physical phone — which no agent session can run itself.**
 
 **If you're picking this up cold, read in this order:** (1) this "Status"
-section, (2) "What's next" near the bottom for the immediate action, (3) the
-"Round 7" subsection under "Phase 0" for the most recent thread (real
-texture assets + two real shader bugs found by actually screenshotting and
-reasoning through the code, not guessing at numbers), (4) "Round 6" for how
-to evaluate an external critique without trusting or dismissing it blindly,
-(5) "Round 5" for the last pre-texture visual change, (6) skim "What was
-built" and rounds 2–4 for context on how the visual engine got here. Don't
-start a "round 8" of self-directed visual tuning purely on your own
-initiative — get a fresh look from the user first; if they have specific
-feedback, "Round 7"'s pattern (real screenshots, real reasoning about why a
-value isn't producing the expected pixels, not just nudging numbers) should
-transfer directly.
+section, (2) "What's next" near the bottom for the immediate action, (3)
+"Round 9" under "Phase 0" for the most recent thread and its central lesson
+(verify uniform updates actually reach the GPU by checking object identity,
+not by reading back the JS value you just set — the two can silently
+diverge), (4) "Round 8" for how "measure the reference, don't describe it"
+found a large framing error, (5) "Round 7" for the real-texture rework,
+(6) "Round 6" for how to evaluate an external critique without trusting or
+dismissing it blindly, (7) skim "What was built" and rounds 2–5 for context
+on how the visual engine got here. Don't start a "round 10" of
+self-directed visual tuning purely on your own initiative — get a fresh
+look from the user first.
 
 ---
 
@@ -662,7 +662,133 @@ photographic quality of the atmosphere. Further convergence needs the
 user's eye on specific remaining differences, not more self-directed
 tuning.
 
-### Verified, and how (current as of round 8, HEAD `927b0b7`+)
+### Round 9: real swell propagation, and the ocean had never actually animated
+
+The user looked at round 8's build and asked four things at once: why the
+ocean looked "kinda smeared," why the atmosphere glow had "no transitions,"
+whether the continents were over-detailed, and — the substantial one —
+whether the filament pattern could be *actual swell propagation*, showing
+where each swell can potentially go, rather than a decorative texture.
+
+**The smearing question had a precise answer.** The ocean shader was not
+visualising currents at all — `GlobeSphere.tsx`'s `uFlowBias` was a single
+global direction (Helena's own compass heading) applied to the *entire
+planet*. Every fragment stretched the same way, which is exactly what
+"smeared" describes. The other two points were quick, real fixes: the
+atmosphere shell's Fresnel term was inverted (brightest at the shell's
+*outer* edge, fading *inward* toward the planet, then hard-cut where the
+geometry ends — the opposite of a real halo), fixed by normalising against
+the limb angle so it peaks at the planet's edge and fades smoothly outward;
+land's luminance lift was pulled back from round 8's level, which read as
+more detailed than §5.1 wants for orientation-only continents.
+
+**The substantial fix, decided with the user:** several invented storm
+sources (`src/data/swellSources.ts`) alongside Helena, each radiating a
+directional great-circle fan from its own origin, using
+`Cg = 1.56 × period` — the same deep-water group-velocity formula
+`phase-1-validation/physics.py`'s `group_velocity_kmh` already uses, kept
+identical deliberately rather than inventing a second number for the same
+physics. `GlobeSphere.tsx`'s ocean branch now loops over up to 6 sources
+per fragment computing: how far each front has travelled (a soft leading
+edge, since real swell fills in behind a front rather than vanishing ahead
+of it), a ~60°-wide directional spread around each storm's actual heading,
+and distance falloff — then uses the energy-weighted direction for the
+*existing* anisotropic sampling (rounds 2/4's engineering, untouched) and
+total local energy for contrast. Anisotropy ratio lowered from ~10:1 to
+~5:1, since direction genuinely varying by position needs less stretch to
+read as flow than one constant direction ever could.
+`MASTER_BUILD_PLAN.md` §8 constrained the scrubber to Helena's marker only;
+decision-log row 18 records this deliberate, user-directed supersession —
+still zero live data, every additional source invented on the same footing
+as Helena, flagged in `swellSources.ts`'s own header.
+
+**Two real bugs, both found by refusing to trust a screenshot that "looked
+plausible" and checking numerically instead of by eye:**
+
+1. **A sharp diamond/kite artifact at each source's own origin.**
+   "Direction pointing away from a point on a sphere" is a vector field
+   with a genuine mathematical singularity exactly at that point — the
+   hairy-ball problem. Bearing rotates arbitrarily fast in the immediate
+   neighbourhood of the origin, and the directional-spread test, though
+   correct everywhere else, cut a visible pie-slice there. Fixed by
+   blending the spread test toward fully omnidirectional within ~15° of
+   each source's own origin — physically reasonable too: a storm's
+   generation area isn't strongly directional yet, only the swell radiating
+   away from it organizes into one. Verified by direct reasoning about the
+   geometry, then confirmed gone in fresh screenshots at multiple angles.
+
+2. **The much bigger one: the timeline scrub did not visibly change the
+   field at all**, discovered only because this round insisted on a
+   specific, falsifiable check (screenshot at "Now" and "3 Days", diff the
+   pixels) rather than eyeballing two renders. The diff came back as
+   **exactly zero** differing ocean pixels — not "subtle," zero — even
+   though the JS-side computation (`angularFrontDistanceRad`, the
+   `frontArray`/`energyArray` `useMemo`s) was independently verified
+   correct at every single step: console-logged values changed correctly
+   with `offsetHours`, the assignment to the uniforms object's `.value`
+   was confirmed immediately afterward to hold the new numbers. Every
+   signal available from *inside the React code* said this was working.
+
+   **The actual cause**, found only by reaching into the running page and
+   comparing object identity directly (`materialRef.current.uniforms
+   .uSourceFront === surfaceUniforms.uSourceFront` → `false`): React Three
+   Fiber's `<shaderMaterial uniforms={x}>` clones the uniforms object once,
+   when the prop is first applied — it does not keep `material.uniforms`
+   as a live reference to the object passed in. Every uniform update in
+   this file, since round 2 introduced this shader, mutated the original
+   JS object's `.value` property, which is a copy the renderer never reads
+   again after mount. Confirmed directly and unambiguously:
+   `materialRef.current.uniforms.uTime.value` read `0` on a running page,
+   and still read `0` three seconds later. **The ocean shader has never
+   actually animated over time in this project's history.** Every
+   screenshot across every one of the previous eight rounds happened to
+   look like a plausible static frame of a complex noise field — nobody
+   noticed because a frozen intricate pattern still looks like "a
+   swirling ocean" in any single image, and no round's verification ever
+   compared the same fixed camera angle at two different timestamps.
+
+   Fixed by mutating the material's own uniforms through a `ref`
+   (`materialRef.current.uniforms.X.value = ...`) instead of the
+   `surfaceUniforms` object, which is now correctly understood as existing
+   only to set *initial* values via the JSX prop.
+
+   **Worth recording honestly: the first fix attempt was wrong**, in an
+   instructive way. The symptom ("timeline scrub doesn't change the field")
+   looked exactly like a stale-closure bug — `useFrame`'s callback
+   capturing an old `frontArray` and never picking up a fresh one — and a
+   debug log seemed to confirm it (the value logged inside `useFrame` was
+   stuck at hour-0's numbers). Switching that specific update from
+   `useFrame` to a `useEffect` with explicit dependencies was a real,
+   worthwhile improvement in its own right (it's the more correct trigger
+   regardless), and is kept. But re-testing after shipping it found the
+   field *still* wasn't responding — the stale-closure theory explained the
+   symptom plausibly but was not the actual cause. Only the
+   object-identity check found the real one. The lesson: when a value you
+   just set doesn't seem to take effect, verify by reading it back from the
+   actual consumer (the material three.js is drawing with), not from the
+   variable you set it on — the two can silently be different objects.
+
+**Verified post-fix, not assumed:** with the camera held fixed
+(`prefers-reduced-motion`, autorotate off), 27% of ocean pixels differ
+across a fixed 5-second window purely from `uTime`-driven animation, where
+before the fix 0% did. Between "Now" and "3 Days" on the timeline, 20% of
+ocean pixels (everything outside the marker/path/timeline UI regions)
+differ, where before the fix — checked with the *same* diff methodology,
+generous wait times up to 12 seconds to rule out this sandbox's documented
+slow-rendering as a confound — 0% did. `smoke-test.mjs` (both viewports),
+`panel-glass-test.mjs`, and `rotate-test.mjs` all still pass with zero
+console errors.
+
+**Not fully polished, said plainly:** where several sources' directional
+fans overlap at "3 Days"' larger front sizes, the result reads as a fairly
+graphic, crisp "spoke" pattern rather than the soft feathered look rounds
+7–8 tuned for elsewhere on the globe — smooth (no hard edges, no NaN
+artifacts, the singularity fix holds), but more diagrammatic than
+photographic. It's a legible answer to "where can this swell go," which
+was the actual ask, but softening the fan-edge transition further is a
+reasonable target for a future round if the user wants it less graphic.
+
+### Verified, and how (current as of round 9, HEAD `9e76b54`)
 
 No physical phone or human testers were available in this session, so
 verification stopped at what automation can actually confirm. Four scripts
@@ -1092,22 +1218,19 @@ confirmed the existing decision rather than changing it.
 
 ## What's next
 
-**Immediate next step:** show the current build (HEAD `349f4fb`) to the
-user again. Round 7 was a real, substantial visual change (real Earth
-textures, not just parameter tuning) made in direct response to the user
-saying the previous build looked nothing like their reference — there is a
-genuine open question of whether it's now close enough, which only a fresh
-look can answer. Don't pre-emptively start a round 8 of self-directed
-tuning on your own judgement. If they're happy, move to the falsifiable
-test below; if not, "Round 7" above (and `phase-0-prototype/README.md`'s
-matching section) shows the pattern that actually worked this time —
-fetch/inspect real reference material and real texture assets where
-possible, take real screenshots and reason concretely about *why* a value
-isn't producing the pixels you expect (both round-7 bugs were found this
-way, not by more guessing) — which should transfer directly to further
-rounds. If another external critique/fix-pack shows up, "Round 6" shows
-the pattern for evaluating one against real screenshots before touching
-anything, rather than either blindly applying it or dismissing it.
+**Immediate next step:** show the current build (HEAD `9e76b54`) to the
+user again — specifically with the ocean now genuinely animating (round 9's
+main fix) and the swell field responding to the timeline, both of which
+were silently broken through rounds 2–8 and would have been invisible in
+any static screenshot the user was ever actually shown. There's a real
+open question of whether the "spoke"-pattern fan overlaps (see Round 9's
+closing note) read as acceptable or need softening. Don't pre-emptively
+start a round 10 of self-directed tuning. If they're happy, move to the
+falsifiable test below; if not, Round 9's pattern — insist on a specific,
+falsifiable check (screenshot-diff pixels, compare object identity in a
+running page) rather than eyeballing or trusting a value you logged from
+the JS side alone — is the one most worth carrying forward, since it's what
+caught a bug that had survived eight prior rounds of "it renders fine."
 
 **Phase 0 is built** (`phase-0-prototype/`, see the section above) but
 **not yet passed** — it's blocked on the one thing no agent session can do
