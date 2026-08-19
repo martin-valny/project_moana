@@ -1,7 +1,7 @@
 # Project Moana — Progress Report
 
 Last updated: 2026-08-19, branch `claude/moana-master-build-plan-v2-zjs07y`,
-HEAD `6161186`. Working tree clean, everything below is pushed.
+HEAD `410aca3`. Working tree clean, everything below is pushed.
 
 **Round 13 was reverted at the user's explicit request — read "Round 14
 planning" immediately below before touching the shader again.**
