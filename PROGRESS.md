@@ -1,7 +1,7 @@
 # Project Moana — Progress Report
 
-Last updated: 2026-08-19, branch `claude/moana-master-build-plan-v2-zjs07y`.
-Working tree clean, everything below is pushed once this commit lands.
+Last updated: 2026-08-19, branch `claude/moana-master-build-plan-v2-zjs07y`,
+HEAD `582412d`. Working tree clean, everything below is pushed.
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -16,42 +16,49 @@ product vision and rules; this file is the build/validation log against it.
 ## Status, one line
 
 **Phase −1 is passed (decided 2026-08-17). Phase 0's visual prototype
-(`phase-0-prototype/`) has had eleven rounds of iteration — user feedback
+(`phase-0-prototype/`) has had twelve rounds of iteration — user feedback
 against a reference image, an external critique evaluated on its merits,
 real Earth textures, measuring the reference instead of describing it, real
 multi-source swell physics (round 9, which also found that **the ocean
 shader had never actually animated over time in this project's history**,
 a React Three Fiber uniforms-update bug present since round 2), lateral
 inhibition and a strength-coded colour ramp (round 10), restyling Helena's
-path/marker off a hard white line and dot (round 11) — and a twelfth
-(§"Round 12" below) that made the timeline's existing past-through-future
-drag range actually discoverable, gated each source's energy so it fades
-in at its own spawn moment instead of showing a residual dot beforehand,
-and gave each swell a trailing "wake" (bright leading edge, receding
-toward its origin) so a single static frame hints at motion without
-requiring the timeline to be scrubbed at all. It is functionally complete
-and automatically verified, but has not been shown to the user since round
-12 landed, and still needs the plan's actual falsifiable gate — five
-non-surfers timed on a physical phone — which no agent session can run
-itself.**
+path/marker off a hard white line and dot (round 11), a bidirectional
+timeline with source spawn-in and a trailing wake (round 12) — and a
+thirteenth (§"Round 13" below) that found the strength-colour ramp,
+despite being wired into the ocean shader since round 10, essentially
+never reached the actual render in the body of the field itself (only
+Helena's own path reliably showed it) — root-caused to two separate
+dilution bugs plus an ACES-tonemap saturation-crushing mechanism at the
+*bright* end this time (round 10 hit the same mechanism at the dark end).
+Fixed and confirmed visible in real screenshots, though still fairly
+subtle overall — see the round's own honest assessment before treating
+this as fully resolved. It is functionally complete and automatically
+verified, but has not been shown to the user since round 13 landed, and
+still needs the plan's actual falsifiable gate — five non-surfers timed on
+a physical phone — which no agent session can run itself.**
 
 **If you're picking this up cold, read in this order:** (1) this "Status"
 section, (2) "What's next" near the bottom for the immediate action, (3)
-"Round 12" under "Phase 0" for the most recent thread (bidirectional
-timeline, source spawn-in, the trailing-wake legibility device), (4)
-"Round 11" for restyling Helena's path/marker, and an additive-blending
-flare bug found along the way, (5) "Round 10" for lateral inhibition,
-pole-zone spirals only visible from a rotated camera, and why the first
-purple colour picked silently failed to render as purple, (6) "Round 9"
-for the swell-physics rework and its central lesson (verify uniform
-updates actually reach the GPU by checking object identity, not by reading
-back the JS value you just set — the two can silently diverge), (7)
-"Round 8" for how "measure the reference, don't describe it" found a large
-framing error, (8) "Round 7" for the real-texture rework, (9) "Round 6"
-for how to evaluate an external critique without trusting or dismissing it
-blindly, (10) skim "What was built" and rounds 2–5 for context on how the
-visual engine got here. Don't start a "round 13" of self-directed visual tuning
-purely on your own initiative — get a fresh look from the user first.
+"Round 13" under "Phase 0" for the most recent thread (why a shader change
+that looks correct on paper can still not reach the render — dilution
+through multi-stage blends, and ACES crushing saturation at both the dark
+*and* the bright end depending which one you push into), (4) "Round 12"
+for the bidirectional timeline, source spawn-in, and the trailing-wake
+legibility device, (5) "Round 11" for restyling Helena's path/marker, and
+an additive-blending flare bug found along the way, (6) "Round 10" for
+lateral inhibition, pole-zone spirals only visible from a rotated camera,
+and why the first purple colour picked silently failed to render as
+purple, (7) "Round 9" for the swell-physics rework and its central lesson
+(verify uniform updates actually reach the GPU by checking object
+identity, not by reading back the JS value you just set — the two can
+silently diverge), (8) "Round 8" for how "measure the reference, don't
+describe it" found a large framing error, (9) "Round 7" for the
+real-texture rework, (10) "Round 6" for how to evaluate an external
+critique without trusting or dismissing it blindly, (11) skim "What was
+built" and rounds 2–5 for context on how the visual engine got here. Don't
+start a "round 14" of self-directed visual tuning purely on your own
+initiative — get a fresh look from the user first.
 
 ---
 
@@ -1041,7 +1048,115 @@ the full range, the new stop's label legible with no collision, and a
 mostly-calm ocean at "-18h" where only the earliest-spawning invented
 sources have anything to show yet.
 
-### Verified, and how (current as of round 12, HEAD `8723a9e`)
+### Round 13: making the strength colour actually reach the ocean body
+
+The user asked directly: "so swell colour scale is just in the 'line'
+depicting swell direction? — that's kinda weird. I'd like it to be somehow
+encoded in the actual body of swell in the ocean." Checked the code first:
+the light-blue-to-purple ramp (round 10) was genuinely wired into the
+ocean shader's `midColor`/`crestColor`, not just the path. But **sampling
+actual rendered pixels well away from Helena's line, across a grid inside
+a swell's own visible cloud, came back plain blue at every single point** —
+confirming the user's read was correct about what actually renders, even
+though the code disagreed. This round is a case study in a shader change
+that reads correctly on paper failing to reach the screen for three
+separate, stacked reasons, found by measuring at every step rather than
+re-guessing after each fix.
+
+**Bug 1 — colour only ever entered the ocean's base tone scaled by `band`**
+(how much ribbon-noise detail sits at that exact pixel). The large
+low-detail areas between ribbons — most of a swell's actual visible
+footprint — stayed at flat `uOceanDeep` blue no matter how strong the
+swell there was, because nothing ever blended colour in independent of
+that noise term. Fixed with a second, band-independent wash
+(`mix(uOceanDeep, midColor, fieldEnergy01 * 0.85)`) so the base tone shifts
+with strength across a swell's whole footprint, not just wherever the
+ribbon noise happens to be bright.
+
+**Bug 2 — the crest highlight's blend anchor was fighting the colour it was
+supposed to carry.** Round 10 tinted crests toward `swellColor` but still
+blended *toward* `uOceanBright`, a separately-authored near-white
+deliberately overexposed (1.55x) so only crests trip bloom. uOceanBright's
+own brightness is roughly double swellColor's, so even an 80% blend weight
+toward swellColor left a 20% near-white remainder bright enough to pull
+red and green channels back toward parity — exactly what erases a colour
+signal that depends on them staying apart (blue vs. purple). Fixed at the
+root: `crestColor` now scales `swellColor`'s own brightness
+(`swellColor * mix(1.0, 1.5, fieldEnergy01)`) instead of blending toward a
+different colour entirely, so its hue can no longer drift from the
+strength ramp no matter the weight.
+
+**Bug 3, the one that took the longest to pin down — a first fix attempt
+for Bug 2 (`mix(1.3, 3.0, fieldEnergy01)`, reasoning that STRONG's own
+luminance is much darker than WEAK's and needs more boost to bloom the
+same way) overshot into the exact opposite failure mode round 10 hit.**
+Isolating the raw `crestColor` on-screen to check it directly showed pure
+white everywhere, regardless of the underlying hue — ACES tonemapping
+crushes saturation at extreme brightness the same way round 10 found it
+crushes saturation in near-darkness. Settled on a much smaller multiplier
+range after checking the actual rendered result, not just the formula.
+
+**Worth recording honestly: two debugging methodologies from earlier
+rounds turned out to have real failure modes of their own, found here:**
+
+1. **Overriding the whole ocean with a single debug colour to inspect it
+   (used successfully in round 10) is invalid once that colour's own
+   luminance exceeds the bloom threshold.** Doing so makes every pixel in
+   the frame bloom-eligible simultaneously, and Bloom's blur then averages
+   brightness across the *entire* ocean rather than the small, localised
+   area a real blend would actually occupy — producing a uniform wash that
+   has nothing to do with how that colour behaves in the real composited
+   scene. Caught by comparing an isolated debug render against the real,
+   non-overridden `oceanColor` output rather than trusting the debug image
+   alone.
+2. **Sampling fixed pixel coordinates across separate screenshots is not
+   a fair comparison when the field being measured is continuously
+   animating** (round 9's own uTime-driven noise). A formula change that
+   appeared to do nothing at a specific coordinate, re-tested run to run,
+   turned out to be working correctly — the noise pattern had simply moved
+   between screenshots, so the same screen pixel wasn't sampling the same
+   part of the field twice. Resolved by scanning whole screenshots for the
+   most colour-shifted pixel rather than trusting any single fixed
+   coordinate across runs.
+
+Also found and worked around, unrelated to the colour work itself: this
+session's sandbox measured **1.2 fps** (95.6s for 120 real animation
+frames, directly instrumented via `requestAnimationFrame` timestamps, not
+estimated) — software/CPU WebGL rasterisation with no GPU, rendering a
+genuinely expensive multi-source fBm shader. At that frame rate,
+`OrbitControls`' damping (`dampingFactor: 0.07`) takes far longer in
+wall-clock time to settle than on a normal device, and a fixed ~20s
+screenshot wait (previously sufficient) was catching the camera mid-ease
+into its final framing, producing different-looking screenshots run to
+run independent of any code change. A ~60s wait was needed for this
+session's tests to be reliably comparable. **This is a property of this
+specific sandboxed environment, not the app** — the same shader on any
+GPU-accelerated device should render close to 60fps, and this was
+confirmed by directly measuring, not assumed.
+
+**Verified, honestly:** `npm run build` and `npm run lint` clean;
+`smoke-test.mjs` (both viewports), `panel-glass-test.mjs`, and
+`rotate-test.mjs` all still pass with zero console errors despite the
+sandbox's current slowness. The fix is confirmed genuinely reaching the
+render — scanning whole screenshots (not fixed coordinates) found clearly
+purple pixels (e.g. `(191,124,237)`, R clearly above G) inside a swell's
+body away from any line, and one of `rotate-test.mjs`'s two angles shows
+an unmistakable violet-lavender tint through an entire swell's cloud, not
+just its line. **That said, said plainly: the overall visual impression
+across most screenshots is still fairly subtle** — much of a swell's
+visible footprint still reads closer to blue-white than to a strongly
+purple body, particularly where sources overlap or energy is moderate
+rather peaking. The mechanism is now demonstrably correct and reaching
+the screen; whether it reads as *strongly enough* colour-coded at a glance
+is a genuine open question for the user's own eyes, not something this
+session's automated checks can settle. A reasonable next lever if it's
+still not enough, not yet tried: `crest * 0.38`'s own blend weight (the
+near-white-leaning crest highlight still dilutes the more strongly-tinted
+mid-tone wash underneath it at high `crest` values) or scoping a
+saturation boost to the ocean specifically rather than continuing to tune
+the ocean shader's own constants further.
+
+### Verified, and how (current as of round 13, HEAD `582412d`)
 
 No physical phone or human testers were available in this session, so
 verification stopped at what automation can actually confirm. Four scripts
