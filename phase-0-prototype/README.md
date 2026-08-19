@@ -1036,6 +1036,32 @@ energy is moderate. The mechanism is now demonstrably correct and reaching
 the screen; whether it reads as strongly enough at a glance is a genuine
 open question for the user's own eyes.
 
+**Addendum, same session, commit `21c53d8`:** the user checked and
+reported still seeing no purple. Verified directly and agreed — the
+"purple pixels exist" claim above was true but misleading, since they were
+isolated crest peaks against a much larger blue/white mist. The actual
+bug, found by cropping in on a real screenshot: **the misty ribbon
+shape's visible extent never depended on energy at all, only its noise
+contrast did** — `band`/`crest` crossed their thresholds fine even at zero
+swell energy, so genuinely calm water still showed a visible mist, and the
+eye reads that whole mist as "the swell," most of which was never
+coloured. Fixed by gating `band`/`crest`'s own coverage on a new
+`ribbonPresence` term, not just their contrast, so the visible cloud now
+shrinks to track where colour actually is. Replaced the earlier
+`pow(fieldEnergy01, 0.45)` ramp (which overshot the other way, boosting
+near-zero energy too and broadly paling/enlarging the cloud) with a
+`smoothstep(0.12, 0.5, fieldEnergy01)` curve that stays flat at genuinely
+calm energy. Cut crest's own blend weight 0.38 → 0.22 — the exact lever
+flagged above as untried — since even with correct hue it was still
+painting over the now-more-saturated mid-tone.
+
+Verified by disabling Bloom entirely and A/B-comparing screenshots:
+contrary to this round's first theory, Bloom's blur was **not** the
+dominant cause — the pre-addendum render looked nearly identical with
+Bloom on or off. The real dilution was upstream, in the shader's own
+coverage logic, not in post-processing. Purple is now visible as a halo
+around Helena's line rather than isolated points.
+
 ## Build bugs worth knowing about (fixed, but instructive)
 
 - **Round 1 (particle field, since replaced):** the point-size formula's

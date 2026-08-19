@@ -1,7 +1,7 @@
 # Project Moana — Progress Report
 
 Last updated: 2026-08-19, branch `claude/moana-master-build-plan-v2-zjs07y`,
-HEAD `582412d`. Working tree clean, everything below is pushed.
+HEAD `21c53d8`. Working tree clean, everything below is pushed.
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -1156,7 +1156,35 @@ mid-tone wash underneath it at high `crest` values) or scoping a
 saturation boost to the ocean specifically rather than continuing to tune
 the ocean shader's own constants further.
 
-### Verified, and how (current as of round 13, HEAD `582412d`)
+**Addendum, same session, commit `21c53d8`:** the user checked screenshots
+after the above and reported still seeing no purple. Verified directly and
+agreed — the "genuinely purple pixels exist" claim above was true but
+misleading: they were isolated crest peaks in a much larger blue/white
+mist. The actual bug, found by cropping in on a real screenshot rather
+than re-tuning blind: **the misty ribbon shape's visible extent never
+depended on energy at all, only its noise contrast did** — `band`/`crest`
+crossed their thresholds fine even at zero swell energy, so genuinely calm
+water still showed a visible mist, and the eye reads that whole mist as
+"the swell," most of which was never coloured. Fixed by gating
+`band`/`crest`'s own coverage on a new `ribbonPresence` term (not just
+their contrast), so the visible cloud now shrinks to actually track where
+colour is. Also replaced the round-13-first-pass ramps with a shared
+`colourRamp` (`smoothstep(0.12, 0.5, fieldEnergy01)`) after a `pow(...,
+0.45)` attempt overshot — boosting low-near-zero energy too, broadly
+paling and enlarging the cloud rather than concentrating colour — and cut
+crest's own blend weight (0.38 → 0.22, the exact lever flagged above as
+untried) so it no longer paints over the now-more-saturated mid-tone.
+Verified by disabling Bloom entirely and A/B-comparing screenshots:
+contrary to this round's first-pass theory (left corrected in the code
+comment), Bloom's blur was **not** the dominant cause — the pre-addendum
+render looked nearly identical with Bloom on or off; the real dilution was
+upstream in the shader's own coverage logic. Post-fix, purple is now
+visible as a halo around Helena's line, not just isolated points — see
+`phase-0-prototype/README.md`'s own round-13 entry for a fuller account.
+Screenshots sent to the user directly; not reproduced here since this
+file doesn't carry images.
+
+### Verified, and how (current as of round 13, HEAD `21c53d8`)
 
 No physical phone or human testers were available in this session, so
 verification stopped at what automation can actually confirm. Four scripts
