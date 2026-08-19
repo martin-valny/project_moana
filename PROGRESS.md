@@ -1,7 +1,7 @@
 # Project Moana — Progress Report
 
-Last updated: 2026-08-18, branch `claude/moana-master-build-plan-v2-zjs07y`,
-HEAD `8723a9e`. Working tree clean, everything below is pushed.
+Last updated: 2026-08-19, branch `claude/moana-master-build-plan-v2-zjs07y`.
+Working tree clean, everything below is pushed once this commit lands.
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -1118,13 +1118,31 @@ unprompted for 30+ seconds."* This requires physical devices and real
 people in the room, which is outside what any agent session can do itself.
 Automated verification above confirms the prototype is functionally
 correct; it is **not** a substitute for the actual human test, and Phase 0
-should not be declared "passed" until that test happens, and not before the
-visual itself has stopped changing round-to-round (see "Status" above —
-five rounds of user feedback so far; check whether the user considers round
-5 the end of that or wants to look again before running the human test).
-Recommended next step for whoever picks this up: `cd phase-0-prototype &&
-npm install && npm run dev`, load it on a phone on the same network, and
-run the test as specified.
+should not be declared "passed" until that test happens.
+
+**As of round 12 (2026-08-19 conversation, HEAD `8ad90e9`): the user has
+been walked through all of this directly** — what the falsifiable gate is
+and why no agent session can run it, how Phase 1+ would work (real
+Open-Meteo data, full global grid, a 3-6h-refreshed static JSON bundle —
+not a live stream, but "live" relative to how slowly swell actually
+moves), and was sent a 16-second screen-recorded video
+(`recordVideo`, not committed anywhere — it only exists as a chat
+attachment) showing the build actually animating: auto-rotate spinning,
+the ocean's own time-based noise running, both disabled in every other
+screenshot in this file for determinism. They have **not yet run the
+human test** — this session ended on that explanation, not on a pass/fail
+result. **Whoever picks this up next: don't re-explain any of the above,
+the user already has it. Ask whether the phone test has happened yet.**
+
+If they want to run it themselves rather than through an agent session:
+`cd phase-0-prototype && npm install && npm run dev`, load it on a phone
+on the same network, run the test as specified. If they want a live,
+fully-interactive session (drag it with their own hands, not a recorded
+video) rather than more screenshots/recordings from an agent, that also
+requires Claude Code running *locally* on their own machine — a remote
+"Claude Code on the web" session like this one has no network path to
+their browser and can only ever produce screenshots or recorded video, not
+a live connection.
 
 Also not yet done, lower-priority than the human test: no dynamic/battery
 adaptive-quality logic (§5.3's "adaptive quality" is scoped to the mobile
@@ -1471,19 +1489,21 @@ confirmed the existing decision rather than changing it.
 
 ## What's next
 
-**Immediate next step:** show the current build (HEAD `9e76b54`) to the
-user again — specifically with the ocean now genuinely animating (round 9's
-main fix) and the swell field responding to the timeline, both of which
-were silently broken through rounds 2–8 and would have been invisible in
-any static screenshot the user was ever actually shown. There's a real
-open question of whether the "spoke"-pattern fan overlaps (see Round 9's
-closing note) read as acceptable or need softening. Don't pre-emptively
-start a round 10 of self-directed tuning. If they're happy, move to the
-falsifiable test below; if not, Round 9's pattern — insist on a specific,
-falsifiable check (screenshot-diff pixels, compare object identity in a
-running page) rather than eyeballing or trusting a value you logged from
-the JS side alone — is the one most worth carrying forward, since it's what
-caught a bug that had survived eight prior rounds of "it renders fine."
+**Immediate next step (current as of round 12, HEAD `8ad90e9`):** see
+"What's still open — the actual gate" under the Phase 0 section above —
+it has the up-to-date state (the user has already seen a live-motion
+recording and been walked through the Phase 0/1 gate and architecture;
+what's actually outstanding is the human phone test itself, not more
+explanation). This paragraph used to say "show the build to the user
+again" pointing at round 9's HEAD; that instruction is long since done —
+twelve rounds of user feedback have landed since, twelve are documented
+above. Read "Status, one line" at the top of this file for the current
+summary before doing anything, don't assume this paragraph is current —
+it's exactly the kind of stale leftover it's now warning against (this
+text itself went un-updated across rounds 10–11 before being caught here
+in round 12's docs pass; the "### What's still open" subsection nearer
+the Phase 0 rounds is the one likely to be kept current going forward,
+check there first).
 
 **Phase 0 is built** (`phase-0-prototype/`, see the section above) but
 **not yet passed** — it's blocked on the one thing no agent session can do
