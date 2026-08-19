@@ -340,6 +340,22 @@ const SURFACE_FRAGMENT = /* glsl */ `
       float band = smoothstep(-0.35, 0.52, n);
       float crest = smoothstep(0.34, 0.70, n);
       crest = pow(crest, 2.0);
+      // Round 13, fifth pass: the actual mismatch behind "I don't see any
+      // purple" — cropping in on a real screenshot showed the misty
+      // ribbon shape extending well beyond where the ocean was actually
+      // being coloured, because band/crest's own visible EXTENT never
+      // depended on fieldEnergy01 at all, only n's contrast did (the
+      // n *= 0.75 + fieldEnergy01 * 0.9 line below). Even at zero
+      // energy, n still crosses these thresholds often enough to paint a
+      // visible mist — so the eye reads "the swell" as the whole misty
+      // shape, most of which was never actually tinted, rather than the
+      // smaller genuinely-energetic core that was. Scaling band/crest's
+      // own coverage down at low energy — not just their contrast —
+      // shrinks the visible cloud to actually track where the colour is,
+      // instead of the two disagreeing about a swell's real extent.
+      float ribbonPresence = smoothstep(0.05, 0.35, fieldEnergy01);
+      band *= mix(0.2, 1.0, ribbonPresence);
+      crest *= mix(0.05, 1.0, ribbonPresence);
 
       // Round 10: replaces the old teal patches (a regional tint driven by
       // arbitrary positional noise, unrelated to any actual swell data) with
@@ -358,7 +374,31 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // weak-but-present swells still show visible colour instead of
       // staying indistinguishable from calm uOceanMid water.
       vec3 swellColor = mix(uSwellWeak, uSwellStrong, fieldEnergy01);
-      vec3 midColor = mix(uOceanMid, swellColor, clamp(fieldEnergy01 * 1.4, 0.0, 1.0));
+      // Round 13, third pass: the user reported seeing no purple at all in
+      // the ocean body, and checking a fresh screenshot personally
+      // confirmed it — purple pixels genuinely existed (verified even with
+      // Bloom disabled entirely, ruling out its blur as the cause) but
+      // were confined to isolated crest peaks, a handful of pixels in a
+      // sea of visibly untinted blue.
+      //
+      // First attempt at a fix used pow(fieldEnergy01, 0.45) as a flat
+      // replacement for fieldEnergy01 everywhere below, reasoning that
+      // most of a swell's visible area sits at moderate energy that a
+      // steep low-end curve would lift. Checked, and it overshot the other
+      // way: pow with an exponent under 1 boosts EVERY energy level,
+      // including the genuinely-near-zero fringes that should stay calm —
+      // since low energy always means uSwellWeak (pale, near-white), the
+      // whole cloud got broadly paler and larger rather than more purple
+      // where it actually mattered. Wrong lever: the goal was concentrating
+      // colour where energy is real, not smearing more of it everywhere.
+      //
+      // colourRamp uses smoothstep instead: flat zero below ~0.12 (leaves
+      // genuinely calm water alone, unlike pow), then rises fast to reach
+      // full strength by ~0.5 — real swell presence, not the near-1.0 raw
+      // fieldEnergy01 rarely reaches, saturates the ramp, while marginal
+      // noise-floor energy still doesn't tint anything.
+      float colourRamp = smoothstep(0.12, 0.5, fieldEnergy01);
+      vec3 midColor = mix(uOceanMid, swellColor, colourRamp);
 
       // Round 8: band weight 0.85 -> 0.72 so the ribbons stay translucent
       // over the base rather than fully replacing it — part of what makes
@@ -376,18 +416,16 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // but independent of band, so the base tone itself shifts with
       // strength everywhere inside a swell's footprint, not just on the
       // noise that happens to be bright at a given pixel.
-      // Round 13, second pass: 0.55 -> 0.85. Simulating the blend chain
-      // numerically (THREE.Color + a real ACES approximation, matched
-      // against measured band/crest/energy at real sample points) predicted
-      // a clearly purple pixel that the actual render did not show — the
-      // gap traced to Bloom's own blur radius (0.6) mixing substantial
-      // light in from the much larger surrounding blue area, since a
-      // strong swell's most-saturated pixels are a comparatively thin
-      // crest streak surrounded by far more area of diluted mid-tone.
-      // Rather than fight that interaction indirectly, push the base tone
-      // itself more saturated so more colour survives being blurred with
-      // its neighbours.
-      vec3 oceanColor = mix(uOceanDeep, midColor, fieldEnergy01 * 0.85);
+      // Round 13, second pass: 0.55 -> a shared colourRamp curve (see
+      // midColor above). A first theory for why colour still wasn't
+      // reaching the render blamed Bloom's blur mixing in the surrounding
+      // blue area — tested directly by disabling Bloom entirely and
+      // comparing screenshots, and ruled out: the rendered cloud looked
+      // essentially identical either way. Reusing colourRamp here (instead
+      // of a separately-tuned constant) is deliberate: this wash and
+      // midColor's own ramp were compounding two separate, inconsistent
+      // lots of dilution at the same energy level before.
+      vec3 oceanColor = mix(uOceanDeep, midColor, colourRamp);
       // Round 8c: mid weight down, crest weight up. The reference holds a
       // wide tonal range — genuinely deep navy water with delicate bright
       // filaments laid over it — whereas pushing band coverage up had
@@ -398,7 +436,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // look for calm/background water), but a strong swell's core needs
       // the purple to actually read as dominant, not just tint through a
       // thin veil.
-      oceanColor = mix(oceanColor, midColor, band * mix(0.70, 0.97, fieldEnergy01));
+      oceanColor = mix(oceanColor, midColor, band * mix(0.70, 0.97, colourRamp));
       // Round 10 tried tinting the crest highlight toward swellColor while
       // keeping uOceanBright (authored at 1.55x, deliberately overexposed
       // so only crests trip bloom) as the blend anchor — mix(uOceanBright,
@@ -428,7 +466,16 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // smaller range keeps the crest reading brighter than the base
       // without pushing far enough into HDR for tonemapping to erase it.
       vec3 crestColor = swellColor * mix(1.0, 1.5, fieldEnergy01);
-      oceanColor = mix(oceanColor, crestColor, crest * 0.38);
+      // Round 13, fourth pass: 0.38 -> 0.22. Even with a correctly-hued
+      // crestColor, a fresh screenshot after the colourRamp fix above
+      // showed a broadly WHITER cloud, not a more purple one — the mid-
+      // tone underneath (now genuinely saturated at real energy levels)
+      // was still being painted over by this highlight everywhere crest
+      // fires, which is most of a ribbon's visible extent, not just its
+      // sharpest peak. Lower weight lets more of the saturated mid-tone
+      // show through; the crest still reads as a highlight, just no longer
+      // one that dominates the colour signal underneath it.
+      oceanColor = mix(oceanColor, crestColor, crest * 0.22);
       // Real bathymetric/current texture as a subtle multiply on top of the
       // procedural ribbons — grounds them in actual geography instead of
       // being the sole source of ocean detail.
