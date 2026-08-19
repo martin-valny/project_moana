@@ -5,8 +5,8 @@ fake swell ("Helena") crossing the North Atlantic, rendered on a cinematic
 dark globe, with a draggable timeline, tap-to-select, and local-only
 Follow.
 
-The visual engine (the globe surface itself) is on its thirteenth
-iteration.
+The visual engine (the globe surface itself) is on its twelfth *landed*
+iteration — a thirteenth was built and then reverted; see below.
 Round 1 used a GPU particle field. Round 2 replaced it with a domain-warped
 fractal-noise shader. Round 3 fixed missing curvature shading, a dead bloom
 pipeline, and several CSS bugs. Round 4 was the first pass with the actual
@@ -42,13 +42,21 @@ energy so it fades in at its own spawn moment instead of showing a
 residual dot beforehand, and gave each swell a trailing wake (bright
 leading edge, receding toward its origin) so a single static frame hints
 at motion without the timeline needing to be scrubbed at all. Round 13
-(current) found the strength-colour ramp, wired into the ocean shader
-since round 10, wasn't actually reaching the render in the body of the
-field — only Helena's own path reliably showed it — and fixed two
-dilution bugs plus an ACES-tonemap saturation-crushing mechanism at the
-bright end (round 10 hit the same mechanism at the dark end). Confirmed
-visible in real screenshots, though still fairly subtle overall — see the
-round's own honest assessment. See "Round 7" through "Round 13" below.
+found the strength-colour ramp, wired into the ocean shader since round
+10, wasn't actually reaching the render in the body of the field — only
+Helena's own path reliably showed it — and fixed two dilution bugs plus an
+ACES-tonemap saturation-crushing mechanism at the bright end (round 10 hit
+the same mechanism at the dark end). **The user saw the result and
+rejected it** — "everything look[s] blue" — and in the same message
+changed direction on Helena's path/marker entirely: not restyled (round
+11 already tried that), removed as a separate rendered object, with her
+position/movement conveyed purely through the same colour-gradient/
+filament language the rest of the field uses. Round 13's shader changes
+were reverted; its diagnosis is kept as history below. **See
+`PROGRESS.md`'s "Round 14 planning" section for the actual next task** —
+not written here to avoid the two docs drifting out of sync. See "Round
+7" through "Round 13" below for the full history, including the reverted
+round.
 
 ## Run it
 
@@ -962,7 +970,14 @@ range, the new stop's label legible with no collision, and a mostly-calm
 ocean at "-18h" where only the earliest-spawning sources have anything to
 show yet.
 
-## Round 13: making the strength colour actually reach the ocean body
+## Round 13: making the strength colour actually reach the ocean body (reverted)
+
+**This round's shader code was reverted** after the user saw it and
+disliked the result, and separately asked for Helena's line/marker to be
+removed entirely rather than restyled again. See `PROGRESS.md`'s "Round
+14 planning" for direction. Kept below as history — the diagnosis remains
+real and worth not re-discovering — but none of these changes are in
+`GlobeSphere.tsx` any more.
 
 The user asked directly: "so swell colour scale is just in the 'line'
 depicting swell direction? — that's kinda weird. I'd like it to be somehow

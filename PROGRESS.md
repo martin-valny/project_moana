@@ -1,7 +1,10 @@
 # Project Moana — Progress Report
 
 Last updated: 2026-08-19, branch `claude/moana-master-build-plan-v2-zjs07y`,
-HEAD `21c53d8`. Working tree clean, everything below is pushed.
+HEAD `6161186`. Working tree clean, everything below is pushed.
+
+**Round 13 was reverted at the user's explicit request — read "Round 14
+planning" immediately below before touching the shader again.**
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -16,36 +19,36 @@ product vision and rules; this file is the build/validation log against it.
 ## Status, one line
 
 **Phase −1 is passed (decided 2026-08-17). Phase 0's visual prototype
-(`phase-0-prototype/`) has had twelve rounds of iteration — user feedback
-against a reference image, an external critique evaluated on its merits,
-real Earth textures, measuring the reference instead of describing it, real
-multi-source swell physics (round 9, which also found that **the ocean
-shader had never actually animated over time in this project's history**,
-a React Three Fiber uniforms-update bug present since round 2), lateral
-inhibition and a strength-coded colour ramp (round 10), restyling Helena's
-path/marker off a hard white line and dot (round 11), a bidirectional
-timeline with source spawn-in and a trailing wake (round 12) — and a
-thirteenth (§"Round 13" below) that found the strength-colour ramp,
-despite being wired into the ocean shader since round 10, essentially
-never reached the actual render in the body of the field itself (only
-Helena's own path reliably showed it) — root-caused to two separate
-dilution bugs plus an ACES-tonemap saturation-crushing mechanism at the
-*bright* end this time (round 10 hit the same mechanism at the dark end).
-Fixed and confirmed visible in real screenshots, though still fairly
-subtle overall — see the round's own honest assessment before treating
-this as fully resolved. It is functionally complete and automatically
-verified, but has not been shown to the user since round 13 landed, and
-still needs the plan's actual falsifiable gate — five non-surfers timed on
-a physical phone — which no agent session can run itself.**
+(`phase-0-prototype/`) has had twelve landed rounds of iteration plus a
+thirteenth that was built, shown to the user, and then explicitly
+reverted** — the user compared it against the pre-round-13 build and
+disliked the result ("everything look[s] blue"), and separately, in the
+same message, changed direction on something round 11 had only partially
+addressed: **they don't want Helena's path/marker as a distinct rendered
+object at all any more** ("I dont wna that line there... the swell
+movement, body, entity has to be intuitive *using color gradients,
+filament movements etc.*"). `GlobeSphere.tsx` is back to its exact
+pre-round-13 state (byte-identical build output, confirmed). Round 13's
+own work is **not** deleted from history below — the diagnosis (a mist/
+colour-extent mismatch, ACES crushing saturation at extremes, Bloom
+*not* being the culprit it first looked like) is real and worth keeping
+even though the resulting look wasn't what the user wanted; just don't
+build on top of it without addressing the direction change first. **See
+"Round 14 planning" immediately below for the actual next task — it is
+not "tune the colours again," it's removing `HelenaPath.tsx`'s line/marker
+rendering and folding her into the same per-fragment swell-field mechanism
+every other source already uses. This is still gated on the plan's own
+falsifiable test — five non-surfers timed on a physical phone — which no
+agent session can run itself, and which has not run yet regardless of
+visual state.**
 
 **If you're picking this up cold, read in this order:** (1) this "Status"
-section, (2) "What's next" near the bottom for the immediate action, (3)
-"Round 13" under "Phase 0" for the most recent thread (why a shader change
-that looks correct on paper can still not reach the render — dilution
-through multi-stage blends, and ACES crushing saturation at both the dark
-*and* the bright end depending which one you push into), (4) "Round 12"
-for the bidirectional timeline, source spawn-in, and the trailing-wake
-legibility device, (5) "Round 11" for restyling Helena's path/marker, and
+section, (2) "Round 14 planning" immediately below — the actual next task,
+(3) "Round 13" under "Phase 0" for the reverted work's own diagnosis (still
+useful, e.g. the Bloom finding, even though the look was rejected), (4)
+"Round 12" for the bidirectional timeline, source spawn-in, and the
+trailing-wake legibility device, (5) "Round 11" for restyling Helena's
+path/marker the first time (now superseded — see Round 14 planning), and
 an additive-blending flare bug found along the way, (6) "Round 10" for
 lateral inhibition, pole-zone spirals only visible from a rotated camera,
 and why the first purple colour picked silently failed to render as
@@ -56,9 +59,130 @@ silently diverge), (8) "Round 8" for how "measure the reference, don't
 describe it" found a large framing error, (9) "Round 7" for the
 real-texture rework, (10) "Round 6" for how to evaluate an external
 critique without trusting or dismissing it blindly, (11) skim "What was
-built" and rounds 2–5 for context on how the visual engine got here. Don't
-start a "round 14" of self-directed visual tuning purely on your own
-initiative — get a fresh look from the user first.
+built" and rounds 2–5 for context on how the visual engine got here.
+
+## Round 14 planning: fold Helena into the swell field, no separate line
+
+**Not started — this is direction for whoever picks it up next, written
+by the session that got the revert request, not yet implemented or shown
+to the user.**
+
+### What the user actually asked for
+
+Verbatim: *"I dont like what you did compare to last version.. I dont
+like the line at all.. like i dont wna that line there. the swel movement,
+body, entity has to be intuitive using color gradients, filament movements
+etc. moreover you kinda just make everything look blue."* Two distinct
+points:
+
+1. **Round 13's colour work made the ocean read as broadly flatter/bluer**
+   than before, not more colourful — already reverted, see above. Nothing
+   further to do here except not repeat the same mistake (see "What to
+   avoid" below).
+2. **The line has to go, full stop — not restyled again, removed.** Round
+   11 already tried once to fix "I don't like the white line and circle"
+   by softening it (gradient stroke, glow billboard instead of a solid
+   dot). That was the wrong kind of fix for what the user now wants: they
+   were never objecting to the line's *styling*, they're objecting to a
+   *separately-drawn path object existing at all*, distinct from the
+   ocean's own procedural rendering. Position, direction, and identity
+   need to emerge from the same colour-gradient/filament-flow language the
+   rest of the swell field already uses, not from a Three.js `Line` +
+   billboard sprite layered on top of it.
+
+### The key fact that makes this tractable, not a rewrite
+
+**Helena is already one of the sources in `buildSwellSources()`**
+(`swellSources.ts`): `const helena: SwellSource = { origin, direction,
+periodS, heightM, spawnOffsetHours: HELENA_MIN_OFFSET_HOURS, ... }`,
+derived directly from `pulse.path[0]`. She already renders in the ocean
+shader with the exact same directional-cone, colour-ramp, and
+trailing-wake machinery (rounds 9/10/12) as the five invented decorative
+sources. The separate `HelenaPath.tsx` component — the curved multi-day
+line plus the glowing current-position marker — is *additional*,
+redundant rendering layered on top of a swell that already has its own
+visual presence in the field. Removing `HelenaPath.tsx`'s visible output
+is not "how do we show her instead" so much as "stop drawing a second,
+conflicting representation of something already shown."
+
+### Concrete plan
+
+1. **Remove `HelenaPath.tsx`'s visible rendering** — the `<Line>` (trail)
+   and the `<Billboard>` glow (marker). Her swell cone in `GlobeSphere.tsx`
+   already conveys position (the cone's origin/spread), direction (the
+   cone's own flow direction, feeding the same anisotropic noise stretch
+   as every other source), strength (the colour ramp, once round 13's
+   *concept* — not its specific tuning — is redone properly), and recency
+   (the round-12 trailing wake, spawn-ramp fade-in).
+2. **Interaction still needs solving**: §6/§8 require tap-to-select and
+   Follow. `HelenaPath.tsx` currently supplies the only click target (an
+   invisible hit-sphere at `currentPos`). Options, not yet evaluated:
+   - Raycast against `GlobeSphere`'s own mesh and compute, per click,
+     whether the hit point falls within Helena's own cone (known
+     analytically: same `spread`/`arrived` test the shader already
+     computes, re-derivable on the JS side from `sources[0]`, `offsetHours`
+     and the click's unprojected lat/lon) — no visible marker needed at
+     all, tap anywhere on her actual swell.
+   - Keep a *small*, low-opacity hit-target mesh at her current position
+     for tap reliability (mobile tap targets need real screen area — the
+     existing `radius * 0.05` sphere in `HelenaPath.tsx` exists for
+     exactly this reason, see its own comment), but make it **fully
+     invisible** (`opacity={0}`, as it already effectively is for the hit
+     mesh) rather than rendering any of the glow/line on top — pure
+     interaction affordance, zero visual footprint. Probably the
+     pragmatic first move: keeps `?e2e=1` / `window.__moanaMarker` (used
+     by `smoke-test.mjs`) working unchanged, since that hook reads
+     `currentPos`, not anything about the line's visual style.
+   - If "which swell is Helena" needs to be visually findable at all
+     (vs. leaving that entirely to the panel/UI), that's a *design*
+     question for the user, not something to guess at — e.g. a distinct
+     hue reserved for her vs. the decorative sources would contradict the
+     "one shared colour language" instruction, so probably not that.
+3. **"Current position" without a drawn marker** is the part most worth
+   getting the user's read on before implementing rather than guessing:
+   does "intuitive, using colour gradients and filament movement" mean the
+   *leading edge* of Helena's own cone (already the brightest, most
+   saturated part per round 12's wake) is sufficient to answer "where is
+   she right now," or does the product actually need a distinct
+   "you-are-here" cue independent of the swell rendering? Worth asking
+   directly rather than assuming either way — this is the one open
+   product question in an otherwise mostly-mechanical task.
+4. Once `HelenaPath.tsx` no longer draws anything, decide whether the file
+   still needs to exist at all (maybe just the invisible hit-target,
+   folded into `Globe.tsx` directly) or whether it's cleaner deleted with
+   click-handling moved elsewhere. Don't leave dead/unused component
+   scaffolding behind.
+
+### What to avoid repeating
+
+Round 13's actual failure wasn't its diagnosis (kept, still true) — it was
+**tuning shader constants against screenshots without stepping back to ask
+whether the visual language itself was right.** Three tuning passes
+(colour weights → curve shape → mist-extent gating) each measurably
+"fixed" what was being tested and still produced a result the user didn't
+want, because the deeper ask (no separate line, ocean-native
+representation) was never on the table until they said so directly. Don't
+default to "keep adjusting numbers until a screenshot looks better" as the
+first move here — the fix this time is structural (remove a whole
+rendering path), not a blend weight.
+
+### Verification, once implemented
+
+- `smoke-test.mjs` currently asserts on `window.__moanaMarker` and a
+  click-driven panel open — confirm what "select Helena" means once there's
+  no visible marker to reference in test descriptions, even if the
+  underlying hook stays the same.
+- Screenshot at a few timeline positions and confirm Helena's own cone is
+  still distinguishable as "the one with the panel/Follow button," not
+  just visually identical to the five decorative sources with no way to
+  tell them apart.
+- Re-run `panel-glass-test.mjs` and `rotate-test.mjs` — removing a
+  rendered layer shouldn't break either, but confirm rather than assume.
+- Show the user a fresh screenshot before considering this done — round 13
+  is the second time in this session a "confirmed working" change wasn't
+  actually what the user wanted once they saw it themselves; don't declare
+  victory from automated checks alone on a subjective visual-language
+  change like this one.
 
 ---
 
@@ -1048,7 +1172,14 @@ the full range, the new stop's label legible with no collision, and a
 mostly-calm ocean at "-18h" where only the earliest-spawning invented
 sources have anything to show yet.
 
-### Round 13: making the strength colour actually reach the ocean body
+### Round 13: making the strength colour actually reach the ocean body (reverted — see "Round 14 planning" above)
+
+**This round's code was reverted at commit `6161186`** after the user saw
+it and disliked the result, and separately changed direction on Helena's
+line/marker (see "Status" and "Round 14 planning" at the top of this
+file). Kept below as history — the diagnosis is real and the mistakes are
+worth not repeating — but `GlobeSphere.tsx` no longer contains any of the
+colour/coverage changes this section describes.
 
 The user asked directly: "so swell colour scale is just in the 'line'
 depicting swell direction? — that's kinda weird. I'd like it to be somehow
@@ -1184,7 +1315,7 @@ visible as a halo around Helena's line, not just isolated points — see
 Screenshots sent to the user directly; not reproduced here since this
 file doesn't carry images.
 
-### Verified, and how (current as of round 13, HEAD `21c53d8`)
+### Verified, and how (as of round 13, before its revert — HEAD `21c53d8`; current HEAD `6161186` is round 12's code, byte-identical)
 
 No physical phone or human testers were available in this session, so
 verification stopped at what automation can actually confirm. Four scripts
