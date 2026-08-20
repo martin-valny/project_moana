@@ -1,10 +1,14 @@
 # Project Moana — Progress Report
 
-Last updated: 2026-08-19, branch `claude/moana-master-build-plan-v2-zjs07y`,
-HEAD `410aca3`. Working tree clean, everything below is pushed.
+Last updated: 2026-08-20, branch `claude/moana-master-build-plan-v2-zjs07y`.
+Working tree clean, everything below is pushed.
 
-**Round 13 was reverted at the user's explicit request — read "Round 14
-planning" immediately below before touching the shader again.**
+**Round 14 has landed: the swell field is now dispersive packets rather than
+filled disc sectors, the colour signal moved from hue to brightness, and
+Helena's drawn line and marker are gone from the globe entirely. Awaiting
+the user's read on the look — every automated gate passes, but automated
+gates are not the same thing (round 13 is the second time in this project a
+change passed every check and still was not what the user wanted).**
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -19,53 +23,53 @@ product vision and rules; this file is the build/validation log against it.
 ## Status, one line
 
 **Phase −1 is passed (decided 2026-08-17). Phase 0's visual prototype
-(`phase-0-prototype/`) has had twelve landed rounds of iteration plus a
-thirteenth that was built, shown to the user, and then explicitly
-reverted** — the user compared it against the pre-round-13 build and
-disliked the result ("everything look[s] blue"), and separately, in the
-same message, changed direction on something round 11 had only partially
-addressed: **they don't want Helena's path/marker as a distinct rendered
-object at all any more** ("I dont wna that line there... the swell
-movement, body, entity has to be intuitive *using color gradients,
-filament movements etc.*"). `GlobeSphere.tsx` is back to its exact
-pre-round-13 state (byte-identical build output, confirmed). Round 13's
-own work is **not** deleted from history below — the diagnosis (a mist/
-colour-extent mismatch, ACES crushing saturation at extremes, Bloom
-*not* being the culprit it first looked like) is real and worth keeping
-even though the resulting look wasn't what the user wanted; just don't
-build on top of it without addressing the direction change first. **See
-"Round 14 planning" immediately below for the actual next task — it is
-not "tune the colours again," it's removing `HelenaPath.tsx`'s line/marker
-rendering and folding her into the same per-fragment swell-field mechanism
-every other source already uses. This is still gated on the plan's own
-falsifiable test — five non-surfers timed on a physical phone — which no
-agent session can run itself, and which has not run yet regardless of
-visual state.**
+(`phase-0-prototype/`) has had fourteen rounds: twelve landed, a thirteenth
+built and reverted, and round 14 — the current state — which rebuilt what a
+swell *is* rather than tuning how one is coloured.**
+
+The user's two round-13 complaints ("I dont wna that line there... the swell
+movement, body, entity has to be intuitive *using color gradients, filament
+movements etc.*" and "you kinda just make everything look blue") both turned
+out to be structural, and both were measured before anything was changed:
+
+- **The purple never rendered.** The round-10..13 weak→strong ramp needed its
+  input above ~0.6 before green drops below red — i.e. before it reads violet
+  at all — while the field's measured working range was 0.05..0.45, mean 0.30,
+  all-time max 0.869. The violet half of that ramp was never once requested on
+  any frame. Round 13's three tuning passes were all downstream of a variable
+  that could not move.
+- **Nothing read as moving** because the brightest part of a swell was not its
+  leading edge. Measured on the CPU, the old on-axis weight profile varied only
+  ~1.5:1 across 70% of a swell's radius and peaked at d ≈ 0.7 × front —
+  *behind* the front — with the storm origin still at 57% of peak. A filled
+  sector reads as a region, not a thing in motion.
+
+Round 14 replaced the model rather than the constants. **This is still gated on
+the plan's own falsifiable test — five non-surfers timed on a physical phone —
+which no agent session can run itself, and which has not run yet.**
 
 **If you're picking this up cold, read in this order:** (1) this "Status"
-section, (2) "Round 14 planning" immediately below — the actual next task,
-(3) "Round 13" under "Phase 0" for the reverted work's own diagnosis (still
-useful, e.g. the Bloom finding, even though the look was rejected), (4)
-"Round 12" for the bidirectional timeline, source spawn-in, and the
-trailing-wake legibility device, (5) "Round 11" for restyling Helena's
-path/marker the first time (now superseded — see Round 14 planning), and
-an additive-blending flare bug found along the way, (6) "Round 10" for
-lateral inhibition, pole-zone spirals only visible from a rotated camera,
-and why the first purple colour picked silently failed to render as
-purple, (7) "Round 9" for the swell-physics rework and its central lesson
-(verify uniform updates actually reach the GPU by checking object
-identity, not by reading back the JS value you just set — the two can
-silently diverge), (8) "Round 8" for how "measure the reference, don't
-describe it" found a large framing error, (9) "Round 7" for the
-real-texture rework, (10) "Round 6" for how to evaluate an external
-critique without trusting or dismissing it blindly, (11) skim "What was
-built" and rounds 2–5 for context on how the visual engine got here.
+section, (2) "Round 14" under "Phase 0" — the current state, the mechanisms,
+and the five bugs the new self-checking harness caught, (3) "The metrics
+harness" for how to re-run the gates, (4) "Round 13" for the reverted work's
+own diagnosis (still true, still useful — the ACES-at-extremes finding is load
+bearing in round 14's colour design), (5) "Round 12" for the bidirectional
+timeline and source spawn-in, (6) "Round 10" for lateral inhibition and
+pole-zone spirals, (7) "Round 9" for the swell-physics rework and its central
+lesson (verify uniform updates actually reach the GPU by checking object
+identity, not by reading back the JS value you just set — the two can silently
+diverge), (8) "Round 8" for how "measure the reference, don't describe it"
+found a large framing error, (9) "Round 7" for the real-texture rework,
+(10) "Round 6" for how to evaluate an external critique without trusting or
+dismissing it blindly, (11) skim "What was built" and rounds 2–5 for context.
 
-## Round 14 planning: fold Helena into the swell field, no separate line
+## Round 14 planning (superseded — round 14 has since landed; see "Round 14" under Phase 0)
 
-**Not started — this is direction for whoever picks it up next, written
-by the session that got the revert request, not yet implemented or shown
-to the user.**
+**Kept as the record of what was planned before implementation. The plan
+below was followed, with two additions it did not anticipate: Helena's
+front had to be derived from her own path rather than Cg, and her
+amplitude had to come from her interpolated waypoint rather than
+`path[0]`. Both are described in the round-14 entry.**
 
 ### What the user actually asked for
 
@@ -1172,7 +1176,243 @@ the full range, the new stop's label legible with no collision, and a
 mostly-calm ocean at "-18h" where only the earliest-spawning invented
 sources have anything to show yet.
 
-### Round 13: making the strength colour actually reach the ocean body (reverted — see "Round 14 planning" above)
+### Round 14: dispersive packets, brightness-first colour, and no drawn line
+
+The round that acted on the user's two round-13 complaints by changing the
+model instead of the constants. Every number quoted below was measured, not
+estimated, and the harness that measured them is now part of the repo.
+
+#### What was wrong, measured before anything was changed
+
+Both complaints were structural, and both were upstream of everything round
+13 had been tuning:
+
+**"You kinda just make everything look blue" — the purple was never
+rendering.** Replaying the round-10..13 colour chain over the field's actual
+values showed the weak→strong ramp only reads violet (green dropping below
+red) above roughly 0.6, while `fieldEnergy01` measured mean **0.30**, P99
+0.385..0.654 across the scrubber, and an all-time global max of **0.869**
+reached on ~0.1% of the globe. The violet half of the ramp was never once
+requested on any frame. No amount of downstream compositing work could have
+fixed that, which is exactly why round 13's three passes did not.
+
+**"The swell movement, body, entity has to be intuitive" — the brightest part
+of a swell was not its leading edge.** Reproducing the old `w(d)` profile on
+the CPU: it varied only **~1.5:1 across 70% of a swell's radius**, peaked at
+**d ≈ 0.7 × front** (behind the front), and left the storm origin at **57% of
+peak**. That is a plateau. A filled disc sector reads as a *region*; nothing
+in a still frame said which way anything was going.
+
+#### The reference image, and what was taken from it
+
+The user supplied a reference and asked for thinking "in this range" rather
+than a copy. Four things it does that the old build did not:
+
+1. **Ribbons, not wedges.** Long filaments, feathered ends, a bright spine —
+   comet-shaped. The structural gap.
+2. **Brightness carries the information, hue carries identity.** Near-white
+   core → cyan → deep blue tails, with hue barely varying. **Zero purple
+   anywhere in the image.**
+3. **Direction is legible in a still frame** purely from asymmetry: sharp on
+   one side, long feather on the other.
+4. **The line moved into the panel.** The small arc glyph beside "HELENA" *is*
+   the path at thumbnail scale — the reference answers "where is she, which
+   way is she going" without drawing anything on the sphere. That is a direct
+   answer to the open question round 13's session left.
+
+#### The five mechanisms
+
+**1. Dispersive packets replace the filled sector.** A storm emits a spectrum,
+and its long-period components outrun its short ones, so what it launches is a
+*band* that stretches as it travels — which is why groundswell arrives
+long-period-first. Each source now has two radii instead of one front:
+`rLead` from `Cg(T+2.0)`, `rTrail` from `Cg(T−3.5)`, floored to a minimum
+width. Within the band the envelope is `s^1.6` times a sharp outer cutoff, so
+it peaks *exactly* at the leading edge and feathers backward — a comet.
+Measured band width grows 2.9° at +6h to 26.7° at +96h. Amplitude falls out of
+geometry rather than a hand-tuned falloff: stretching and lateral spreading
+both dilute a fixed energy, giving 1.00 → 0.10 raw, floored to 1.00 → 0.42.
+
+**2. The colour signal moved to a channel that survives the pipeline.**
+Luminance and saturation carry energy and recency; hue only says *which* swell
+you are looking at, across a narrow cyan-to-teal range driven by period. This
+respects round 13's own finding rather than discarding it — ACES crushes
+saturation at both extremes, so nothing now asks hue to carry meaning where
+brightness is extreme. `swellPalette.ts` was replaced outright. No purple.
+
+**3. Filament anisotropy scales with period** — roughly 3.9:1 for a 13 s
+wind-swell up to 8:1 for a 17 s groundswell, so the two identity cues (hue and
+filament shape) reinforce rather than decorate independently.
+
+**4. The scrub drags the water.** `uTime` and `offsetHours` used to be
+independent clocks, so scrubbing moved the packet edges while the texture
+underneath sat still — the ocean re-drew rather than responding. The noise
+phase now advects with the scrub as well, at 0.004 rad/hour, deliberately well
+under the ~0.0141 a 16 s group velocity implies (wave *energy* travels at Cg;
+the water surface does not). `useDampedValue` gives the scrubber
+critically-damped inertia so a flick does not teleport the field.
+
+**5. Identity without a line.** `HelenaPath.tsx` is **deleted** — both `Line`
+passes, the glow billboard, and the invisible hit-sphere. Selection raycasts
+the globe, unprojects to a unit vector, and takes an argmax of the field's own
+per-source weight, so you select the swell you can actually see. The panel's
+arc glyph, previously the hardcoded decorative curve `M2 68 Q 96 2 191 33`, is
+now projected from `pulse.path` with the dot at the interpolated current
+position. Selection also drives a **focus pull** — the selected swell lifts,
+the others recede — measured at bright-pixel fraction 3.70% → 2.91%.
+
+#### One fact, one place
+
+Hit-testing needs the same weight function the shader renders, so the math
+genuinely has to exist in two languages this round. That is this project's
+most expensive recurring bug shape (round 9's uniforms-cloning bug; the
+hand-written heading that contradicted its own waypoints; the 'WNW' label on an
+ENE path). `src/data/swellField.ts` is the single source of truth: TypeScript
+for the CPU, a `SWELL_FIELD_GLSL` string for the shader, written as
+line-by-line transliterations — and `parity-probe.mjs` asserts they agree
+rather than trusting that they do. Worst measured divergence: **0.000368**,
+against a 0.02 tolerance.
+
+#### Two data bugs the round exposed
+
+Both were latent, both were hidden by the old plateau, and both would have
+become visible contradictions the moment the leading edge became the hero.
+
+**Helena travelled at the wrong speed.** Her hardcoded path covers 3594 km in
+114 h — about 32 km/h — while her stated ~14.8 s mean period implies a group
+velocity of ~83 km/h. A **2.6× disagreement**, 9× on her final legs. With the
+front now the brightest feature *and* the panel glyph driven off the same
+waypoints, a `Cg`-propagated front would have raced visibly ahead of where the
+glyph says she is. Fixed by deriving her front from her own path; the invented
+storms keep `Cg`, because for them `Cg` *is* the data.
+
+**Helena rendered at her weakest moment, permanently.** Her `SwellSource` took
+height and period from `pulse.path[0]` — 2.6 m / 13.5 s, her *first and
+weakest* waypoint — and never updated, while her data is a full time series
+peaking at 4.6 m / 16.7 s. Measured at the opening frame she came out at
+amplitude **0.194, the dimmest source on the globe**, against Kaimana's 0.637.
+The swell the entire panel is about was the hardest one to see. Her amplitude
+and period now come from the interpolated waypoint. Direction deliberately does
+not: a packet's heading is set when the storm generates it.
+
+#### What the self-checking harness caught
+
+The loop was built to stop round 13 repeating — tuning constants against
+screenshots with nothing able to say the effort was misdirected. It earned its
+keep five times, and four of the five were caught in the CPU stage in seconds
+rather than the ~60 s a screenshot costs in this sandbox:
+
+1. **A fixed `FRONT_FEATHER` inverted the comet on young packets.** Band width
+   grows ~10× over the scrubber, so any absolute feather is a small fraction of
+   a mature band and a large fraction of a young one — at +12h it made the
+   leading edge *softer* than the trailing feather, pointing the direction cue
+   backwards. Feather is now a fraction of width, making the asymmetry
+   scale-invariant.
+2. **`FIELD_GAIN` — round 13's exact failure, caught before it shipped.** The
+   raw field's P99 measured 0.385..0.654, so a 0..1 colour ramp built on it
+   would once again never have reached its top. M8 now fails if the range ever
+   collapses again.
+3. **One pole-fade constant had to become two.** The old single 0.26 rad blend
+   zone was tuned against filled sectors whose fronts reached 0.5..1.5 rad. A
+   young *packet* sits entirely inside 0.26 rad — Helena's is at 0.085..0.135
+   at "Now" — so the directional cone blended to fully omnidirectional and she
+   rendered as a ring. First render of the round was hard-edged bubbles.
+4. **Rotating the globe silently cleared the selection.** Now that the whole
+   globe is the tap target, R3F fired `onClick` at the end of every drag.
+   Caught by `panel-glass-test.mjs`, which rotates with the panel open and
+   photographs the result: it reported the panel opening, and the screenshot
+   showed no panel. Fixed with a drag-vs-tap distance threshold.
+5. **M9 did not exist until the +3 Days frame needed it.** Mature packets
+   merged into one pale mint wash covering most of the hemisphere. Peak
+   brightness (M8) says nothing about how much *area* is lit, and the
+   reference's whole character is selective ribbons over genuinely dark water.
+
+One measurement was itself wrong and was fixed rather than worked around:
+M1p first failed at 0.79 × rLead because it argmax'd a single noisy scanline
+through a deliberately jittered edge. Averaging across a fan of tracks was the
+honest fix. M8b was likewise re-expressed as a fraction of the *globe* after
+failing at -18h on a 7.28% ratio that turned out to be 17 pixels.
+
+#### Verified, honestly
+
+`npm run build` and `npm run lint` clean. All three pre-existing Playwright
+suites pass in both viewports, zero console errors. Gate results at the state
+being handed over:
+
+| Gate | Measured | Threshold |
+|---|---|---|
+| M1 leading-edge dominance (model) | 0.03% of band width | ≤ 15% |
+| M4 still-frame asymmetry (model) | 4.68× | ≥ 3.0× |
+| M8 dynamic range | P99 ≥ 0.831 | ≥ 0.65 |
+| M8b not broadly clipped | 0.868% of globe | ≤ 1.5% |
+| M9 bands not a wash | 14.8% of globe | ≤ 22% |
+| B CPU/GPU parity | 0.000368 | ≤ 0.02 |
+| M2 brightness range on screen | **2.51×** | ≥ 2.5× |
+| M3 no violet leakage | **0 of 718,550 px** | ≤ 0.1% |
+| M1p leading edge brightest on screen | 0.91 × rLead | 1.0 ± 0.18 |
+| M4p asymmetry survives pipeline | 3.63× | ≥ 1.25× |
+| M5a/M5b scrub advances and redraws | all edges advance; 30.4% of px changed | — |
+| M7 glyph matches data | delta (0.00, 0.00)° | ≤ 1.5° |
+
+**Said plainly: M2 passes at 2.51 against a 2.5 threshold — that is a margin
+of under one percent, not a comfortable pass.** It is the gate most likely to
+flip on any future change to the colour chain, and if it does the answer is
+more contrast in the bands, not a lower threshold.
+
+**Not verified by any of this: whether it looks right.** Automated gates
+establish that the mechanism reaches the screen and that the failures of
+rounds 10–13 cannot silently recur. They cannot settle a subjective visual
+question, and round 13 is the second time in this project a change passed
+every check and still was not what the user wanted once they saw it.
+
+#### The metrics harness
+
+```bash
+cd phase-0-prototype
+npm run build && npm run lint
+node --import ./ts-resolve-hook.mjs --experimental-strip-types field-metrics.mjs --cpu     # Stage A
+npm run preview -- --port 4173 &
+node --import ./ts-resolve-hook.mjs --experimental-strip-types parity-probe.mjs            # Stage B
+node --import ./ts-resolve-hook.mjs --experimental-strip-types field-metrics.mjs --pixels  # Stage C
+node smoke-test.mjs && node panel-glass-test.mjs && node rotate-test.mjs                   # Stage D
+node timeline-shots.mjs                                                                    # Stage E
+```
+
+`ts-resolve-hook.mjs` lets the harnesses import the app's own TypeScript
+directly (the app uses extensionless bundler-style imports; Node requires
+extensions), so they measure the code that ships rather than a transcription
+of it. No bundler needed — Vite 8 ships rolldown, not esbuild, and adding a
+dependency just to run a test would be a poor trade.
+
+**Stage A is where geometry gets tuned.** It runs against the TypeScript model
+with no renderer at all, so an iteration costs milliseconds against the ~60 s a
+screenshot costs here. Four of the five bugs above were caught there.
+
+#### Sandbox constraints that still apply
+
+Unchanged from round 13 and still load-bearing: this environment renders at
+**~1.2 fps** (software WebGL, no GPU, measured directly). OrbitControls damping
+needs **~60 s** of wall clock to settle before screenshots are comparable — a
+20 s wait catches the camera mid-ease and produces different framing run to
+run independent of any code change. `smoke-test.mjs`'s 30 s click timeout is
+calibrated for this, not a defect. `detectQualityTier()` is deliberately *not*
+keyed on reduced-motion, so test screenshots render the high tier.
+
+#### Open, and deliberately not done
+
+- **The §8 gate has still not run**: five non-surfers timed on a physical
+  phone. No agent session can run it.
+- **Land treatment was left alone.** The continents read heavier against the
+  reference than the ocean does, but that is round 7/8/9 territory and outside
+  what this round was asked to change. Worth a look if the user agrees.
+- **The panel's arc glyph is honest but plain** — Helena's real track is nearly
+  a straight diagonal in lon/lat, so the glyph no longer looks like the
+  reference's graceful curve. It now shows the data instead of a decoration,
+  which was the point; whether it should be styled further is a design call.
+
+---
+
+### Round 13: making the strength colour actually reach the ocean body (reverted — superseded by round 14 above)
 
 **This round's code was reverted at commit `6161186`** after the user saw
 it and disliked the result, and separately changed direction on Helena's

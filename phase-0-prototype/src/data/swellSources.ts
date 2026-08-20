@@ -1,6 +1,8 @@
 import { Vector3 } from 'three';
 import { latLonToVector3 } from '../three/geo';
 import { HELENA_MIN_OFFSET_HOURS } from './helena';
+import { interpolatePulseAt, normalizeEnergy } from './interpolate';
+import { packetAmplitude, packetAt, packetFromFront, type SwellSourceState, type Vec3 } from './swellField';
 import type { SwellPulse } from './types';
 
 /**
@@ -40,6 +42,12 @@ export interface SwellSource {
   heightM: number;
   /** Hours relative to app-load time at which this storm generated its swell. */
   spawnOffsetHours: number;
+  /**
+   * Set only for Helena. When present, her leading edge is read from her own
+   * waypoint path instead of being propagated at `Cg` — see
+   * `resolveSwellSources` for why.
+   */
+  pulse?: SwellPulse;
 }
 
 /**
@@ -87,17 +95,22 @@ const INVENTED: RawSource[] = [
     bearingDeg: 25, // NNE toward Tahiti / Hawaii — the real 2024 corridor
     periodS: 17,
     heightM: 5.2,
-    // Round 9's first pass spawned every invented source 22-70h before "now"
-    // — plausible individually, but with Cg this fast (95 km/h for a
-    // 17s period) that front had already grown to blanket most of a
-    // visible hemisphere by the time anyone looked at "Now", so scrubbing
-    // the timeline forward moved a boundary that had mostly already
-    // scrolled off screen. Recalibrated so each front starts at a modest,
-    // legible radius (roughly 8-24 degrees, varies by source) and still
-    // grows dramatically (to roughly 55-80 degrees) by "3 Days" — the
-    // whole point of wiring the timeline into the field in the first
-    // place was for that growth to be visible, not just numerically real.
-    spawnOffsetHours: -16,
+    // Round 9 pulled every spawn offset late (to -12..-30h) because a
+    // filled disc sector that had been growing for 40+ hours blanketed most
+    // of the visible hemisphere, leaving nothing to watch grow.
+    //
+    // Round 14 inverts that constraint. A dispersive packet is a thin band,
+    // not a filled disc, so age no longer means coverage — it means a
+    // *wider, softer* band that has travelled further, which is exactly the
+    // reference's proportions (long ribbons, not small arcs). At -16h this
+    // source opened as a 15-degree crescent 4.4 degrees wide; measured, the
+    // reference's bands read far longer and broader than that.
+    //
+    // Offsets are now spread deliberately unevenly (-20 to -60h) so the
+    // opening frame holds packets at genuinely different stages — a young
+    // tight one, a couple mid-journey, one broad and fading — rather than
+    // six variations of the same age. Real oceans are not synchronised.
+    spawnOffsetHours: -38,
   },
   {
     id: 'auster',
@@ -107,7 +120,7 @@ const INVENTED: RawSource[] = [
     bearingDeg: 40,
     periodS: 16,
     heightM: 4.6,
-    spawnOffsetHours: -24,
+    spawnOffsetHours: -52,
   },
   {
     id: 'aleutian',
@@ -117,7 +130,7 @@ const INVENTED: RawSource[] = [
     bearingDeg: 105, // ESE toward North America
     periodS: 15.5,
     heightM: 4.8,
-    spawnOffsetHours: -30,
+    spawnOffsetHours: -60,
   },
   {
     id: 'meridian',
@@ -127,7 +140,7 @@ const INVENTED: RawSource[] = [
     bearingDeg: 335, // NNW up the South Atlantic
     periodS: 14.5,
     heightM: 3.9,
-    spawnOffsetHours: -20,
+    spawnOffsetHours: -30,
   },
   {
     id: 'boreas',
@@ -137,7 +150,7 @@ const INVENTED: RawSource[] = [
     bearingDeg: 200, // SSW out of the Norwegian Sea
     periodS: 13,
     heightM: 3.4,
-    spawnOffsetHours: -12,
+    spawnOffsetHours: -20,
   },
 ];
 
@@ -173,9 +186,80 @@ export function buildSwellSources(pulse: SwellPulse): SwellSource[] {
     periodS: first.swell_period,
     heightM: first.swell_height,
     spawnOffsetHours: HELENA_MIN_OFFSET_HOURS,
+    pulse,
   };
 
   return [helena, ...INVENTED.map(toSource)].slice(0, MAX_SWELL_SOURCES);
+}
+
+/**
+ * Resolves every source to its state at one moment — the packet geometry and
+ * amplitude the shader renders and hit-testing reads.
+ *
+ * **Helena's leading edge comes from her own waypoints, not from `Cg`.** Her
+ * hardcoded path (`helena.ts`) covers 3594 km in 114 h — about 32 km/h —
+ * while her stated ~14.8 s mean period implies a group velocity of ~83 km/h.
+ * That is a 2.6x disagreement (9x on her final legs, where she shoals and
+ * the track genuinely decelerates). Rounds 9-13 hid it: the field was a flat
+ * plateau, so nobody could see where its edge was. Round 14 makes the
+ * leading edge the brightest, most meaningful feature *and* drives the
+ * panel's arc glyph off the same waypoints, so a `Cg`-propagated front would
+ * have raced visibly ahead of where the glyph says she is.
+ *
+ * Deriving one from the other is this project's standing fix for exactly
+ * this shape of bug — the hand-written heading that contradicted its own
+ * waypoints, the 'WNW' label on an ENE path. The invented storms keep `Cg`
+ * because they have no path: for them, `Cg` *is* the data.
+ */
+export function resolveSwellSources(
+  sources: readonly SwellSource[],
+  startTime: Date,
+  offsetHours: number,
+): SwellSourceState[] {
+  return sources.map((s) => {
+    // A path-backed source carries a time series, so read it. Everything
+    // below that can evolve — position, height, period — comes from the
+    // waypoint interpolated at this moment rather than from a scalar frozen
+    // at build time.
+    const at = s.pulse
+      ? interpolatePulseAt(s.pulse, new Date(startTime.getTime() + offsetHours * 3600_000))
+      : undefined;
+
+    // Direction is deliberately NOT interpolated: a packet's heading is set
+    // when the storm generates it and does not change afterwards. Swinging
+    // it with the current waypoint would rotate the whole packet, including
+    // the part already far behind the front.
+    const periodS = at ? at.swell_period : s.periodS;
+
+    const packet = at
+      ? packetFromFront(
+          Math.acos(Math.max(-1, Math.min(1, s.origin.dot(latLonToVector3(at.lat, at.lon, 1))))),
+          periodS,
+        )
+      : packetAt(s.periodS, offsetHours - s.spawnOffsetHours);
+
+    // Helena's energy used to be taken from `pulse.path[0]` and never
+    // updated, which meant the hero swell rendered at her own *weakest*
+    // moment for the whole session: path[0] is 2.6 m / 13.5 s (energy 0.23
+    // normalised) while she peaks at 4.6 m / 16.7 s (0.88). Measured at the
+    // opening frame she came out at amp 0.194 — the dimmest source on the
+    // globe, against Kaimana's 0.637 — so the swell the panel is about was
+    // the hardest one to see. Same shape of bug as her front speed: a scalar
+    // frozen at build time standing in for a series that was right there.
+    const energy = normalizeEnergy(
+      at ? at.energy : s.heightM * s.heightM * s.periodS,
+    );
+    const ramp = spawnRamp01(s.spawnOffsetHours, offsetHours);
+
+    return {
+      origin: s.origin.toArray() as unknown as Vec3,
+      direction: s.direction.toArray() as unknown as Vec3,
+      rLead: packet.rLead,
+      rTrail: packet.rTrail,
+      amp: energy * ramp * packetAmplitude(packet),
+      periodS,
+    };
+  });
 }
 
 const EARTH_RADIUS_KM = 6371;

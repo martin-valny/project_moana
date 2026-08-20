@@ -1,11 +1,18 @@
-import { useEffect, useMemo, useRef } from 'react';
-import { useFrame, useLoader } from '@react-three/fiber';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useFrame, useLoader, type ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
 import { SIMPLEX_NOISE_GLSL } from './shaders/noise';
 import { FBM_GLSL } from './shaders/fbm';
-import { MAX_SWELL_SOURCES, angularFrontDistanceRad, buildSwellSources, spawnRamp01 } from '../data/swellSources';
-import { normalizeEnergy } from '../data/interpolate';
-import { SWELL_WEAK, SWELL_STRONG } from './swellPalette';
+import { MAX_SWELL_SOURCES, buildSwellSources, resolveSwellSources } from '../data/swellSources';
+import { SWELL_FIELD_GLSL } from '../data/swellField';
+import {
+  PERIOD_HUE_MAX_S,
+  PERIOD_HUE_MIN_S,
+  SWELL_CORE,
+  SWELL_DEEP,
+  SWELL_MID,
+  SWELL_SHORT,
+} from './swellPalette';
 import type { SwellPulse } from '../data/types';
 
 const SURFACE_VERTEX = /* glsl */ `
@@ -38,33 +45,43 @@ const SURFACE_FRAGMENT = /* glsl */ `
   uniform float uTime;
   uniform int uOctaves;
 
-  // Round 9: replaces a single global flow direction (Helena's own compass
-  // heading, applied to the entire planet) with real swell propagation from
-  // several storm sources. This is what "the ocean looks smeared" was
-  // describing — one direction everywhere reads as smear, not current;
-  // direction that varies with position and time reads as flow. Per source:
-  // an origin, an initial travel direction, how far its front has reached
-  // (uSourceFront, precomputed on the CPU from Cg = 1.56 * period per
-  // phase-1-validation/physics.py's group_velocity_kmh, so the two agree),
-  // and a normalised energy for weighting. See swellSources.ts.
+  // Round 9 replaced a single global flow direction with real swell
+  // propagation from several storm sources — direction that varies with
+  // position and time reads as flow, one direction everywhere reads as
+  // smear. Round 14 keeps that and changes what each source *is*: no longer
+  // a filled disc sector capped by a soft arc, but a dispersive packet — a
+  // band between two radii that stretches as it travels. See
+  // ../data/swellField.ts for the model and why; that module is the single
+  // source of truth and the GLSL below is included from it verbatim.
   const int MAX_SOURCES = 6;
   uniform int uSourceCount;
   uniform vec3 uSourceOrigin[MAX_SOURCES];
   uniform vec3 uSourceDir[MAX_SOURCES];
-  uniform float uSourceFront[MAX_SOURCES];   // angular distance travelled, radians
-  uniform float uSourceEnergy[MAX_SOURCES];  // normalised 0..1
+  uniform float uSourceRLead[MAX_SOURCES];  // leading edge, radians
+  uniform float uSourceRTrail[MAX_SOURCES]; // trailing edge, radians
+  uniform float uSourceAmp[MAX_SOURCES];    // energy x spawn ramp x packet attenuation
+  uniform float uSourcePeriod[MAX_SOURCES]; // seconds — drives hue and filament anisotropy
+
+  /** Hours the scrubber is showing, so filaments advect with the scrub. */
+  uniform float uScrubHours;
+  /** Index of the selected source, or -1. Drives the focus pull. */
+  uniform int uSelected;
 
   uniform vec3 uLandColor;
   uniform vec3 uCoastColor;
   uniform vec3 uOceanDeep;
   uniform vec3 uOceanMid;
-  uniform vec3 uOceanBright; // authored >1.0 so only ribbon crests trip the bloom threshold
-  uniform vec3 uSwellWeak;   // light blue — weak local swell energy
-  uniform vec3 uSwellStrong; // deep purple — strong local swell energy
+  uniform vec3 uSwellCore;  // near-white — a packet's leading edge
+  uniform vec3 uSwellMid;   // cyan — long-period groundswell midtone
+  uniform vec3 uSwellShort; // muted green-teal — shorter-period midtone
+  uniform vec3 uSwellDeep;  // deep blue — the trailing feather
   uniform vec3 uScatterColor;
+  uniform float uPeriodHueMin;
+  uniform float uPeriodHueMax;
 
   ${SIMPLEX_NOISE_GLSL}
   ${FBM_GLSL}
+  ${SWELL_FIELD_GLSL}
 
   // Must agree exactly with geo.ts's latLonToVector3, which the swell path
   // and marker use. An earlier version added +0.5 here, which offset the
@@ -130,31 +147,46 @@ const SURFACE_FRAGMENT = /* glsl */ `
       color = uLandColor + vec3(0.34, 0.33, 0.31) * pow(nightLum, 1.8) * 0.62;
     } else {
       // --- Swell propagation: per-fragment direction and energy --------
-      // For each source, three things at this fragment (vPos):
-      //  - arrived: has the source's front (grown from uSourceFront, which
-      //    the JS side advances as the timeline scrubs) reached here yet,
-      //    with a soft leading edge rather than a hard cutoff — real swell
-      //    fills in behind a front, it doesn't just vanish ahead of it.
-      //  - spread: real storms don't radiate a full 360-degree disc — swell
-      //    stays within roughly a 60-degree arc of the storm's actual
-      //    direction. toP is the tangent AT THE SOURCE pointing toward this
-      //    fragment; comparing it to the source's own travel direction is
-      //    what makes this a directional fan rather than an expanding ring.
-      //  - falloff: simple distance decay (real geometric spreading on a
-      //    sphere is closer to 1/sqrt(sin(d)), but that blows up at d=0 and
-      //    this is a stylised prototype, not a physics sim — 1/(1+d*k) is
-      //    numerically safe and tunable by eye like everything else here).
-      // away, the outward tangent AT THIS FRAGMENT continuing along the
-      // same great circle, is what previous rounds called the flow bias —
-      // the difference is it is now recomputed per fragment per source
-      // instead of once for the whole planet.
-      const float FRONT_WIDTH = 0.14;
-      const float SPREAD_COS_FULL = 0.5;   // cos(60°) — spread reaches zero here
-      const float SPREAD_COS_HALF = 0.906; // cos(25°) — full strength within this cone
-
+      // Each source contributes a dispersive packet (../data/swellField.ts):
+      // a band between rTrail and rLead that stretches as it travels,
+      // because a storm emits a spectrum and its long-period components
+      // outrun its short ones. Within the band the envelope peaks exactly at
+      // the leading edge and feathers backward — a comet, not a plateau.
+      //
+      // That asymmetry is the point. Rounds 9-13 modelled each source as a
+      // filled disc sector, whose on-axis weight measured only ~1.5:1 across
+      // 70% of a swell's radius and peaked at d ~ 0.7 x front — *behind* the
+      // swell's own edge, with the storm origin still at 57% of peak. A
+      // filled sector reads as a region; a tapered packet reads as a thing
+      // in motion, and its direction is legible in a still frame with no
+      // animation and nothing drawn on top.
+      //
+      // 'away' is the outward tangent at this fragment along the great
+      // circle from the source — recomputed per fragment per source, which
+      // is what makes flow vary across the globe rather than smearing the
+      // whole planet one way.
       vec3 flowAccum = vec3(0.0);
       float energyAccum = 0.0;
       float poleAccum = 0.0;
+      // Dominant source at this fragment. Hue and filament anisotropy follow
+      // whichever source is strongest here rather than a blend of all of
+      // them: averaging two periods would invent a third swell that is not
+      // there, and averaging their directions is the seam artifact round 10
+      // already had to work around with lateral inhibition.
+      float bestWeight = 0.0;
+      float domPeriod = uSourcePeriod[0];
+      float domSelected = 0.0;
+
+      // Breaks the analytic arc. The packet envelope is exact geometry, so
+      // rendered straight it draws a mathematically perfect band — which is
+      // precisely what the first renders of this round looked like: clean
+      // crescents with silhouettes, not weather. Displacing the distance fed
+      // to the envelope by low-frequency noise makes each leading edge
+      // wander the way a real front does, without touching the model
+      // underneath: hit-testing and the parity probe both still evaluate the
+      // clean analytic field, because this is a rendering perturbation and
+      // not part of what "where is this swell" means.
+      float edgeJitter = fbm(vPos * 2.6, min(uOctaves, 3));
 
       for (int i = 0; i < MAX_SOURCES; i++) {
         if (i >= uSourceCount) break;
@@ -162,60 +194,38 @@ const SURFACE_FRAGMENT = /* glsl */ `
         vec3 D = uSourceDir[i];
         float d = acos(clamp(dot(S, vPos), -1.0, 1.0));
 
-        vec3 toPRaw = vPos - S * dot(S, vPos);
-        float toPLen = length(toPRaw);
-        vec3 toP = toPLen > 1e-4 ? toPRaw / toPLen : D;
-        float spreadRaw = smoothstep(SPREAD_COS_FULL, SPREAD_COS_HALF, dot(D, toP));
-        // The real bug this round shipped with, and the actual cause of a
-        // sharp diamond/kite artifact right at Helena's marker: toP (the
-        // bearing FROM the source TO this fragment) sweeps through its full
-        // 360-degree range over a physically tiny distance near the source's
-        // own origin — small steps around the pole are huge steps in
-        // bearing. The directional cone test (spreadRaw) is well-defined
-        // there mathematically, but it cuts out a literal pie-slice at a
-        // scale small enough to render as a hard-edged wedge rather than the
-        // soft fan it becomes farther out. Blending toward fully omni-
-        // directional within about 15 degrees of each source's own origin
-        // fixes this at the geometric root — and is physically reasonable
-        // too: a storm's generation area isn't a strongly directional point
-        // source yet, only the swell radiating away from it organizes into
-        // one.
-        float poleFade = smoothstep(0.0, 0.26, d);
-        float spread = mix(1.0, spreadRaw, poleFade);
+        // The packet, from swellField.ts — sharp at the leading edge, long
+        // feather behind it. Everything that used to be FRONT_WIDTH /
+        // trailFade / falloff is now inside this one call plus the CPU-side
+        // amplitude, so shader and CPU cannot drift apart.
+        float bandWidth = max(uSourceRLead[i] - uSourceRTrail[i], 1e-4);
+        // Displacement is capped against the packet's own RADIUS as well as
+        // its width. Width alone is not enough: a young packet's width is
+        // held up by MIN_BAND_WIDTH_RAD and can be most of its radius —
+        // Helena at "Now" is 0.13 rad out with a 0.12 rad band — so a
+        // width-proportional jitter shifted her whole leading edge by half
+        // her radius. Measured, that pulled her rendered peak to 0.80 x
+        // rLead, close to the 0.7 x plateau peak this round exists to get
+        // away from. The cap keeps edges wandering without letting the
+        // wander swamp the thing it is decorating.
+        float jitterScale = min(bandWidth * 0.55, uSourceRLead[i] * 0.18);
+        float dJittered = d + edgeJitter * jitterScale;
+        float w = moanaSourceWeight(S, D, vPos, uSourceRLead[i], uSourceRTrail[i], uSourceAmp[i], dJittered);
+        float poleFade = smoothstep(0.0, MOANA_FLOW_POLE, d);
+        // The hairy-ball singularity, still real and still handled inside
+        // moanaSpread/moanaFlow: "bearing away from a point on a sphere"
+        // rotates arbitrarily fast in the small neighbourhood around that
+        // point, which rounds 9 and 10 both shipped visible artifacts from
+        // (a hard-edged kite at Helena's origin; a pinwheel). A packet
+        // starts at its own origin even though it does not stay there, so
+        // this is still needed.
+        vec3 away = moanaFlow(S, D, vPos, d);
 
-        // Round 12: leadingEdge is the same crisp cutoff as before — real
-        // information ("the swell hasn't reached here yet") that should
-        // stay sharp. What's new is trailFade, dimming the long-passed
-        // part of the wake back toward the source's own origin. Physically
-        // the previous flat plateau behind the edge was defensible (these
-        // are modelled as ongoing storms, still generating, not a single
-        // pulse), but it meant a static frame carried no visual cue that
-        // the water near an origin is OLDER than the water at the growing
-        // edge — nothing read as in motion without scrubbing the timeline.
-        // Purely a legibility device, same spirit as round 11's fade on
-        // Helena's own path: brightest and sharpest at the current edge,
-        // gently receding behind it, floor at 0.3 so the wake recedes
-        // rather than disappearing (it is still there, just older).
-        float leadingEdge = 1.0 - smoothstep(uSourceFront[i] - FRONT_WIDTH, uSourceFront[i] + FRONT_WIDTH, d);
-        float trailFade = smoothstep(0.0, max(uSourceFront[i] * 0.75, FRONT_WIDTH), d);
-        float arrived = leadingEdge * mix(0.3, 1.0, trailFade);
-        float falloff = 1.0 / (1.0 + d * 1.3);
-        float w = spread * arrived * falloff * uSourceEnergy[i];
-
-        vec3 awayRaw = vPos * dot(S, vPos) - S;
-        float awayLen = length(awayRaw);
-        vec3 away = awayLen > 1e-4 ? awayRaw / awayLen : D;
-        // away has the exact same hairy-ball singularity toP did above — the
-        // bearing AWAY from the source sweeps through its full range over a
-        // tiny distance near the source's own origin, same underlying cause.
-        // Round 9's poleFade fix only ever blended spread (the cone-test
-        // magnitude), never this direction, so it was still fed into
-        // flowAccum raw. That was already a latent bug; the round-10 sharpen
-        // below turned it into a visible pinwheel/starburst, by concentrating
-        // weight most heavily exactly at d=0 (falloff peaks there) — right
-        // where this direction is least defined. Same fix as spread: blend
-        // toward the stable source direction D near the origin.
-        away = normalize(mix(D, away, poleFade));
+        if (w > bestWeight) {
+          bestWeight = w;
+          domPeriod = uSourcePeriod[i];
+          domSelected = (i == uSelected) ? 1.0 : 0.0;
+        }
 
         // Round 10: sharp dividing lines where two sources' fans overlap at
         // comparable strength — the user spotted this and proposed the fix
@@ -263,7 +273,20 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // contrast there regardless of which direction this points.
       float flowMag = length(flowAccum);
       vec3 f = flowMag > 1e-5 ? normalize(flowAccum) : vec3(0.0, 0.0, 1.0);
-      float fieldEnergy01 = clamp(energyAccum, 0.0, 1.0);
+      // MOANA_FIELD_GAIN exists because the raw sum has no reason to land in
+      // 0..1 — measured, its P99 across the scrubber was 0.385..0.654, so a
+      // 0..1 ramp built on it would never reach its own top. That is
+      // precisely the bug round 13 spent three passes tuning downstream of.
+      // See swellField.ts's FIELD_GAIN, and M8 in field-metrics.mjs, which
+      // fails if the range ever collapses again.
+      float fieldEnergy01 = clamp(energyAccum * MOANA_FIELD_GAIN, 0.0, 1.0);
+
+      // Period sets hue and filament shape. Long-period groundswell runs as
+      // long, clean, near-parallel filaments; shorter-period swell is
+      // choppier and shorter-scaled. Physically true, and it means the two
+      // identity cues (hue, filament shape) reinforce each other instead of
+      // being independent decorations.
+      float periodMix = smoothstep(uPeriodHueMin, uPeriodHueMax, domPeriod);
 
       // --- Anisotropic noise domain -----------------------------------
       // The single most important line in this shader. Splitting the sample
@@ -299,7 +322,12 @@ const SURFACE_FRAGMENT = /* glsl */ `
       float dirConfidence = clamp(flowMag * 6.0, 0.0, 1.0) * poleConfidence;
       vec3 along = dot(vPos, f) * f;
       vec3 across = vPos - along;
-      vec3 coord = along * mix(1.0, 0.35, dirConfidence) + across * mix(1.0, 1.75, dirConfidence);
+      // Round 14: the along-flow scale is now period-dependent rather than a
+      // flat 0.35 for every source — roughly 3.9:1 for a 13 s wind-swell up
+      // to 8:1 for a 17 s groundswell. Same mechanism as before, just no
+      // longer pretending every swell has the same texture.
+      float alongScale = mix(0.45, 0.22, periodMix);
+      vec3 coord = along * mix(1.0, alongScale, dirConfidence) + across * mix(1.0, 1.75, dirConfidence);
 
       // Travel along the flow, plus a slow independent evolution so the
       // field never reads as a rigid texture sliding past.
@@ -312,7 +340,21 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // was enough to redraw the spiral the stretch fade was supposed to
       // remove — found by testing a rotated camera angle that brought a
       // source's own origin (not just an inter-source seam) into frame.
-      coord += f * (uTime * 0.025) * dirConfidence;
+      // Round 14: uScrubHours joins uTime here, and it is the single biggest
+      // "smooth over time" change in this round. Before, uTime drove the
+      // filaments and offsetHours drove the packet edges — two independent
+      // clocks, so scrubbing moved the envelope while the texture underneath
+      // sat still. The ocean re-drew instead of responding. Advecting the
+      // noise phase with the scrub too means dragging the timeline
+      // physically pulls the water along the flow.
+      //
+      // 0.004 rad/hour is deliberately well under the ~0.0141 rad/hour a
+      // 16 s group velocity implies, and that is the honest number rather
+      // than a compromise: wave *energy* travels at Cg, the water surface
+      // itself does not. Filaments streaming at a fraction of the front's
+      // speed is what real swell looks like — and it keeps a fast scrub from
+      // reading as the texture racing.
+      coord += f * (uTime * 0.025 + uScrubHours * 0.004) * dirConfidence;
       vec3 evolve = f * 0.15 * dirConfidence + vec3(uTime * 0.009);
 
       // Moderate warp: enough for gentle S-curves and feathering, not so
@@ -341,53 +383,73 @@ const SURFACE_FRAGMENT = /* glsl */ `
       float crest = smoothstep(0.34, 0.70, n);
       crest = pow(crest, 2.0);
 
-      // Round 10: replaces the old teal patches (a regional tint driven by
-      // arbitrary positional noise, unrelated to any actual swell data) with
-      // a strength-coded colour ramp the user asked for directly: light blue
-      // for weak local swell energy, deep purple for strong. fieldEnergy01
-      // is already exactly the right per-fragment signal — zero outside
-      // every source's footprint, rising toward each source's own weight
-      // inside it — so this both answers the colour-scheme ask and, for
-      // free, makes each source's directional cone legible as a shape: the
-      // cone geometry (spread x arrived, below) already existed, it just
-      // rendered in nearly the same blue as the calm water around it. Now a
-      // strong swell's wedge visibly reads as purple fanning out from its
-      // origin and fading to light blue at its edges, exactly where the
-      // cone geometry itself already tapers to zero. The x1.4 gain lets the
-      // ramp reach full strength before fieldEnergy01's own 1.0 clamp, so
-      // weak-but-present swells still show visible colour instead of
-      // staying indistinguishable from calm uOceanMid water.
-      vec3 swellColor = mix(uSwellWeak, uSwellStrong, fieldEnergy01);
-      vec3 midColor = mix(uOceanMid, swellColor, clamp(fieldEnergy01 * 1.4, 0.0, 1.0));
+      // --- Colour: brightness carries the information, hue carries identity
+      //
+      // Round 14 replaces rounds 10-13's light-blue -> deep-purple
+      // strength ramp. That ramp needed its input above ~0.6 before green
+      // dropped below red (i.e. before it read violet at all), while the
+      // field's measured range was 0.05..0.45, mean 0.30, all-time max
+      // 0.869. Its violet half was never once requested on any frame — which
+      // is what "you kinda just make everything look blue" was reporting,
+      // and why three passes of tuning downstream could not have fixed it.
+      //
+      // The signal now rides luminance and saturation, which survive this
+      // pipeline; hue only distinguishes *which* swell you are looking at,
+      // across a narrow cyan-to-green-teal range in the midtones. See
+      // swellPalette.ts. Round 13's own findings are respected rather than
+      // discarded: ACES crushes saturation at both extremes, so nothing here
+      // asks hue to carry meaning where brightness is extreme.
+      vec3 swellHue = mix(uSwellShort, uSwellMid, periodMix);
+      // Deep blue in the trailing feather -> hue through the body ->
+      // near-white at the leading edge. One ramp, monotonic in brightness.
+      vec3 swellColor = mix(uSwellDeep, swellHue, smoothstep(0.0, 0.55, fieldEnergy01));
+      swellColor = mix(swellColor, uSwellCore, smoothstep(0.62, 1.0, fieldEnergy01));
 
-      // Round 8: band weight 0.85 -> 0.72 so the ribbons stay translucent
-      // over the base rather than fully replacing it — part of what makes
-      // the reference's flow read as veils suspended over an ocean instead
-      // of opaque paint on top of one.
-      vec3 oceanColor = uOceanDeep;
-      // Round 8c: mid weight down, crest weight up. The reference holds a
-      // wide tonal range — genuinely deep navy water with delicate bright
-      // filaments laid over it — whereas pushing band coverage up had
-      // filled most of the ocean with a uniform mid-blue and flattened
-      // exactly that range. Less fill, more highlight.
-      // The colour ramp's penetration scales up with energy too — at low
-      // energy this matches round 8's original 0.60 exactly (unchanged
-      // look for calm/background water), but a strong swell's core needs
-      // the purple to actually read as dominant, not just tint through a
-      // thin veil.
-      oceanColor = mix(oceanColor, midColor, band * mix(0.60, 0.88, fieldEnergy01));
-      // Round 10: without this, uOceanBright (a flat near-white) painted
-      // straight over the strongest part of every swell's core, exactly
-      // where the purple ramp above should be most visible — a strong
-      // swell's crest and its most energetic point are the same place. A
-      // flat white crest there reads as generic sea foam and erases the
-      // colour signal right where it matters most. Tinting the crest
-      // highlight itself toward swellColor keeps crests reading as bright
-      // (still uOceanBright-dominant, never as dark as swellColor alone)
-      // while letting a strong swell's foam carry a violet-white cast
-      // instead of plain white.
-      vec3 crestColor = mix(uOceanBright, swellColor, fieldEnergy01 * 0.6);
-      oceanColor = mix(oceanColor, crestColor, crest * 0.38);
+      // Focus pull (§6/§8 selection, without drawing anything): the selected
+      // swell lifts, the others recede. A contrast change rather than a
+      // highlight ring or an outline — the reference never marks a swell,
+      // it just makes the one you care about the brightest thing in frame.
+      float focus = uSelected < 0 ? 1.0 : mix(0.62, 1.22, domSelected);
+      float energyFocused = clamp(fieldEnergy01 * focus, 0.0, 1.0);
+
+      // Calm water keeps its own faint structure — the reference shows wispy
+      // detail across the whole ocean, not only inside the bright bands.
+      vec3 oceanColor = mix(uOceanDeep, uOceanMid, band * 0.34);
+
+      // Round 13's Bug 1, kept fixed: colour used to enter the ocean *only*
+      // scaled by 'band' (how much ribbon noise sits at this exact pixel), so
+      // the low-detail gaps between ribbons — most of a swell's actual
+      // footprint — stayed flat deep blue however strong the swell was. This
+      // wash is band-independent, so a packet's whole body carries its
+      // colour and the noise modulates within it rather than gating it.
+      //
+      // Balance matters as much as presence. The first pass here washed the
+      // packet body at 0.88 with only a 0.45 noise term on top, which made
+      // each packet a near-solid crescent — clean, geometric, and nothing
+      // like the reference's filament ribbons. The split below keeps colour
+      // everywhere in the packet (so Bug 1 stays fixed) but moves most of the
+      // *brightness* into the noise, so the body reads as flowing filaments
+      // rather than a shape someone drew.
+      // The wash is applied through a curve, not linearly. Linear meant a
+      // faint but visible tint everywhere the field had any energy at all —
+      // 55% of the globe by +3 Days — which read as the whole ocean changing
+      // colour rather than as bands lit on deep water. Squaring-ish
+      // suppresses the long low-energy tail while leaving the bands
+      // untouched, so open water stays open water.
+      float washWeight = pow(energyFocused, 1.6);
+      oceanColor = mix(oceanColor, swellColor * 0.5, washWeight * 0.95);
+      oceanColor = mix(oceanColor, swellColor * 1.45, band * washWeight * 0.9);
+
+      // Round 13's Bug 2, kept fixed: the crest highlight used to blend
+      // toward uOceanBright, a separately-authored near-white about twice
+      // swellColor's luminance, so even an 80% blend left enough of it to
+      // pull R and G back toward parity and erase the hue underneath.
+      // Scaling swellColor's *own* brightness instead means a crest can
+      // never drift off the ramp, whatever the weight. The multiplier stays
+      // modest because round 13's Bug 3 found the opposite failure: push it
+      // far enough and ACES returns flat white regardless of hue.
+      vec3 crestColor = swellColor * mix(1.0, 1.6, energyFocused);
+      oceanColor = mix(oceanColor, crestColor, crest * mix(0.10, 0.78, washWeight));
       // Real bathymetric/current texture as a subtle multiply on top of the
       // procedural ribbons — grounds them in actual geography instead of
       // being the sole source of ocean detail.
@@ -502,8 +564,14 @@ const ATMOSPHERE_SCALE = 1.045;
 interface GlobeSphereProps {
   radius: number;
   pulse: SwellPulse;
+  /** App-load time, the anchor `offsetHours` is measured from. Needed here because Helena's leading edge is read from her own waypoint path, which is timestamped. */
+  startTime: Date;
   /** Hours relative to app-load time — the same value the Timeline drives (§8's scrubber), now read by the whole field, not just Helena's marker. See MASTER_BUILD_PLAN.md §11's round-9 decision-log entry for why that constraint was deliberately superseded. */
   offsetHours: number;
+  /** Index into the source list of the selected swell, or -1. Drives the focus pull. */
+  selectedIndex: number;
+  /** Called with the tapped point as a unit vector, for Globe.tsx to resolve to a source. */
+  onPick?: (unit: THREE.Vector3) => void;
   octaves?: number;
 }
 
@@ -519,7 +587,7 @@ interface GlobeSphereProps {
  * (short version: one direction for the whole planet is what "the ocean
  * looks smeared" was describing).
  */
-export function GlobeSphere({ radius, pulse, offsetHours, octaves = 5 }: GlobeSphereProps) {
+export function GlobeSphere({ radius, pulse, startTime, offsetHours, selectedIndex, onPick, octaves = 5 }: GlobeSphereProps) {
   // Round 7: a real (Natural-Earth-derived) land/ocean mask replaces the
   // earlier hand-rolled scanline-fill one — see public/textures/SOURCES.md.
   const landMask = useLoader(THREE.TextureLoader, '/textures/earth-water.png');
@@ -559,25 +627,24 @@ export function GlobeSphere({ radius, pulse, offsetHours, octaves = 5 }: GlobeSp
     return { originArray, dirArray };
   }, [sources]);
 
-  // Recomputed whenever the timeline scrubs — each source's front grows
-  // (or, scrubbed backward, shrinks) with `offsetHours` per
-  // angularFrontDistanceRad's Cg = 1.56 * period.
-  const { frontArray, energyArray } = useMemo(() => {
-    const frontArray: number[] = [];
-    const energyArray: number[] = [];
+  // Recomputed whenever the timeline scrubs. Every number here comes from
+  // swellField.ts via resolveSwellSources — the same call Globe.tsx's
+  // hit-testing uses, so what you tap and what you see cannot disagree.
+  const { rLeadArray, rTrailArray, ampArray, periodArray } = useMemo(() => {
+    const states = resolveSwellSources(sources, startTime, offsetHours);
+    const rLeadArray: number[] = [];
+    const rTrailArray: number[] = [];
+    const ampArray: number[] = [];
+    const periodArray: number[] = [];
     for (let i = 0; i < MAX_SWELL_SOURCES; i++) {
-      const s = sources[i];
-      if (!s) {
-        frontArray.push(0);
-        energyArray.push(0);
-        continue;
-      }
-      frontArray.push(angularFrontDistanceRad(s.periodS, s.spawnOffsetHours, offsetHours));
-      const fullEnergy = normalizeEnergy(s.heightM * s.heightM * s.periodS);
-      energyArray.push(fullEnergy * spawnRamp01(s.spawnOffsetHours, offsetHours));
+      const s = states[i];
+      rLeadArray.push(s ? s.rLead : 0);
+      rTrailArray.push(s ? s.rTrail : 0);
+      ampArray.push(s ? s.amp : 0);
+      periodArray.push(s ? s.periodS : 0);
     }
-    return { frontArray, energyArray };
-  }, [sources, offsetHours]);
+    return { rLeadArray, rTrailArray, ampArray, periodArray };
+  }, [sources, startTime, offsetHours]);
 
   const surfaceUniforms = useMemo(
     () => ({
@@ -587,8 +654,12 @@ export function GlobeSphere({ radius, pulse, offsetHours, octaves = 5 }: GlobeSp
       uSourceCount: { value: sources.length },
       uSourceOrigin: { value: originArray },
       uSourceDir: { value: dirArray },
-      uSourceFront: { value: frontArray },
-      uSourceEnergy: { value: energyArray },
+      uSourceRLead: { value: rLeadArray },
+      uSourceRTrail: { value: rTrailArray },
+      uSourceAmp: { value: ampArray },
+      uSourcePeriod: { value: periodArray },
+      uScrubHours: { value: offsetHours },
+      uSelected: { value: selectedIndex },
       uOctaves: { value: octaves },
       // World-space key light direction — soft upper-left bias, matching
       // the reference's gentle overall brightness gradient. Fixed, not
@@ -603,10 +674,15 @@ export function GlobeSphere({ radius, pulse, offsetHours, octaves = 5 }: GlobeSp
       uCoastColor: { value: new THREE.Color('#9fb4c6') },
       uOceanDeep: { value: new THREE.Color('#0a1c33') },
       uOceanMid: { value: new THREE.Color('#356da4') },
-      uOceanBright: { value: new THREE.Color('#e6fbff').multiplyScalar(1.55) },
-      uSwellWeak: { value: new THREE.Color(SWELL_WEAK) },
-      uSwellStrong: { value: new THREE.Color(SWELL_STRONG) },
+      // Authored slightly over 1.0 so only a packet's brightest core trips
+      // the bloom threshold — the leading edge blooms, the feather does not.
+      uSwellCore: { value: new THREE.Color(SWELL_CORE).multiplyScalar(1.35) },
+      uSwellMid: { value: new THREE.Color(SWELL_MID) },
+      uSwellShort: { value: new THREE.Color(SWELL_SHORT) },
+      uSwellDeep: { value: new THREE.Color(SWELL_DEEP) },
       uScatterColor: { value: new THREE.Color('#5aa8cc') },
+      uPeriodHueMin: { value: PERIOD_HUE_MIN_S },
+      uPeriodHueMax: { value: PERIOD_HUE_MAX_S },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [landMask, nightTexture],
@@ -648,10 +724,52 @@ export function GlobeSphere({ radius, pulse, offsetHours, octaves = 5 }: GlobeSp
     material.uniforms.uSourceCount.value = sources.length;
     material.uniforms.uSourceOrigin.value = originArray;
     material.uniforms.uSourceDir.value = dirArray;
-    material.uniforms.uSourceFront.value = frontArray;
-    material.uniforms.uSourceEnergy.value = energyArray;
+    material.uniforms.uSourceRLead.value = rLeadArray;
+    material.uniforms.uSourceRTrail.value = rTrailArray;
+    material.uniforms.uSourceAmp.value = ampArray;
+    material.uniforms.uSourcePeriod.value = periodArray;
+    material.uniforms.uScrubHours.value = offsetHours;
+    material.uniforms.uSelected.value = selectedIndex;
     material.uniforms.uOctaves.value = octaves;
-  }, [sources, originArray, dirArray, frontArray, energyArray, octaves]);
+  }, [sources, originArray, dirArray, rLeadArray, rTrailArray, ampArray, periodArray, offsetHours, selectedIndex, octaves]);
+
+  // Selection: unproject the tap to a point on the unit sphere and hand it
+  // up. Globe.tsx does the argmax against the same resolved states this
+  // shader is rendering, so "what you tapped" and "what you see" are the
+  // same evaluation, not two implementations of it.
+  // Where the pointer went down, so a drag can be told from a tap.
+  //
+  // This matters now in a way it did not before. Until round 14 the only
+  // click target was a small invisible sphere at Helena's marker, so a drag
+  // almost never began and ended on it. The whole globe is the target now,
+  // and R3F fires onClick whenever pointerdown and pointerup land on the
+  // same object — so every rotation of the globe ended in a "tap" at
+  // wherever the drag finished, usually open water, silently clearing the
+  // selection. Caught by panel-glass-test.mjs, which rotates the globe with
+  // the panel open and photographs the result: it reported the panel opening
+  // and then showed no panel in the screenshot.
+  const pointerDownAt = useRef<{ x: number; y: number } | null>(null);
+
+  const handlePointerDown = useCallback((e: ThreeEvent<PointerEvent>) => {
+    pointerDownAt.current = { x: e.nativeEvent.clientX, y: e.nativeEvent.clientY };
+  }, []);
+
+  const handlePick = useCallback(
+    (e: ThreeEvent<MouseEvent>) => {
+      if (!onPick) return;
+      const down = pointerDownAt.current;
+      pointerDownAt.current = null;
+      // A few pixels of slop, so a tap with a shaky finger still selects but
+      // an intentional rotation never does.
+      if (down) {
+        const moved = Math.hypot(e.nativeEvent.clientX - down.x, e.nativeEvent.clientY - down.y);
+        if (moved > 6) return;
+      }
+      e.stopPropagation();
+      onPick(e.point.clone().normalize());
+    },
+    [onPick],
+  );
 
   const atmosphereUniforms = useMemo(
     () => ({
@@ -667,7 +785,12 @@ export function GlobeSphere({ radius, pulse, offsetHours, octaves = 5 }: GlobeSp
 
   return (
     <group>
-      <mesh>
+      {/* The globe itself is the tap target now. Round 11's invisible
+          hit-sphere at Helena's marker is gone with the marker: selection
+          raycasts this mesh and asks the field which swell is strongest
+          where you touched, so you select the swell you can actually see
+          rather than a hidden proxy for it. */}
+      <mesh onClick={handlePick} onPointerDown={handlePointerDown}>
         <sphereGeometry args={[radius, 128, 128]} />
         <shaderMaterial ref={materialRef} vertexShader={SURFACE_VERTEX} fragmentShader={SURFACE_FRAGMENT} uniforms={surfaceUniforms} />
       </mesh>

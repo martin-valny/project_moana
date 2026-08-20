@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Globe } from './three/Globe';
 import { Masthead } from './components/Masthead';
 import { Timeline } from './components/Timeline';
 import { SwellPanel } from './components/SwellPanel';
 import { Attribution } from './components/Attribution';
 import { useFollow } from './hooks/useFollow';
+import { useDampedValue } from './hooks/useDampedValue';
 import { buildHelenaPulse, HELENA_MAX_OFFSET_HOURS, HELENA_MIN_OFFSET_HOURS, shortLabelFor } from './data/helena';
 import { interpolatePulseAt } from './data/interpolate';
 import './App.css';
@@ -36,19 +37,49 @@ export default function App() {
   const pulse = useMemo(() => buildHelenaPulse(startTime), [startTime]);
 
   const [offsetHours, setOffsetHours] = useState(0);
-  const [selected, setSelected] = useState(false);
+  // Round 14: the field follows a damped copy of the scrubber rather than the
+  // raw pointer value. Dragging the timeline now physically pulls the ocean's
+  // filaments along the flow (see uScrubHours in GlobeSphere.tsx), and doing
+  // that off an undamped value makes the water snap between positions. A
+  // critically-damped follow gives the scrub inertia — dragging fluid, not
+  // teleporting a slider.
+  const scrubHours = useDampedValue(offsetHours);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
   const [infoOpen, setInfoOpen] = useState(false);
+  // Helena is always index 0 in buildSwellSources(); the panel is hers alone
+  // in Phase 0, since the other five sources are invented decoration with no
+  // data behind them (see swellSources.ts).
+  const selected = selectedIndex === 0;
 
   const currentPoint = useMemo(() => {
-    const target = new Date(startTime.getTime() + offsetHours * 60 * 60 * 1000);
+    const target = new Date(startTime.getTime() + scrubHours * 60 * 60 * 1000);
     return interpolatePulseAt(pulse, target);
-  }, [pulse, offsetHours, startTime]);
+  }, [pulse, scrubHours, startTime]);
 
   const { isFollowed, toggleFollow } = useFollow(pulse.id);
 
+  // `?e2e=1` only. Lets field-metrics.mjs check that the panel's path glyph
+  // is drawn from the same waypoint the app believes it is showing (M7) —
+  // the glyph is the only place a *route* is still drawn now that the globe
+  // has no line, so it disagreeing with the scrubber would be invisible
+  // until someone noticed the dot in the wrong place.
+  useEffect(() => {
+    if (!new URLSearchParams(window.location.search).has('e2e')) return;
+    (window as unknown as Record<string, unknown>).__moanaCurrentPoint = {
+      lat: currentPoint.lat,
+      lon: currentPoint.lon,
+    };
+  }, [currentPoint]);
+
   return (
     <div className="app">
-      <Globe pulse={pulse} currentPoint={currentPoint} offsetHours={offsetHours} onSelectHelena={() => setSelected((v) => !v)} />
+      <Globe
+        pulse={pulse}
+        startTime={startTime}
+        offsetHours={scrubHours}
+        selectedIndex={selectedIndex}
+        onSelectSource={setSelectedIndex}
+      />
 
       <div className="overlay">
         <div className="topLeft">
@@ -67,7 +98,13 @@ export default function App() {
       </div>
 
       {selected && (
-        <SwellPanel pulse={pulse} shortLabel={shortLabelFor(currentPoint.heading_deg)} isFollowed={isFollowed} onToggleFollow={toggleFollow} />
+        <SwellPanel
+          pulse={pulse}
+          currentPoint={currentPoint}
+          shortLabel={shortLabelFor(currentPoint.heading_deg)}
+          isFollowed={isFollowed}
+          onToggleFollow={toggleFollow}
+        />
       )}
 
       <Attribution open={infoOpen} onClose={() => setInfoOpen(false)} />

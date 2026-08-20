@@ -4,9 +4,20 @@
 //   npm run build && npm run preview -- --port 4173 & node smoke-test.mjs
 import { chromium } from 'playwright';
 
-// ?e2e=1 makes the app publish Helena's projected marker position on window.
-// Sweeping screen coordinates to find it is not viable: under software GL
-// every synthetic click waits on a rendered frame, so a grid search takes
+// ?e2e=1 makes the app publish a screen position for Helena on window.
+//
+// Round 14 changed what that position *is* without changing this test.
+// There is no drawn marker any more — no line, no glowing dot, nothing on
+// the globe belonging to Helena specifically — so "select Helena" now means
+// tapping her swell itself, and the published point is the peak of her
+// packet: the point at rLead along her travel great circle, where the comet
+// envelope and the directional cone are both 1.0, i.e. provably her
+// brightest pixel. Selection raycasts the globe and takes an argmax of the
+// field's own per-source weight at the tapped point, so this test now
+// exercises the real thing a user does rather than a hidden proxy for it.
+//
+// Sweeping screen coordinates to find it is still not viable: under software
+// GL every synthetic click waits on a rendered frame, so a grid search takes
 // minutes per viewport.
 const URL = 'http://127.0.0.1:4173/?e2e=1';
 

@@ -1,14 +1,15 @@
-import { Suspense, useEffect, useMemo } from 'react';
-import { Canvas, useThree } from '@react-three/fiber';
+import { Suspense, useCallback, useEffect, useMemo } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette, Noise, HueSaturation, BrightnessContrast, ToneMapping } from '@react-three/postprocessing';
 import { ToneMappingMode } from 'postprocessing';
-import { NoToneMapping, type PerspectiveCamera } from 'three';
+import { NoToneMapping, Vector3, type PerspectiveCamera } from 'three';
 import { GlobeSphere } from './GlobeSphere';
 import { latLonToVector3 } from './geo';
-import { HelenaPath } from './HelenaPath';
 import { detectQualityTier } from './qualityTier';
-import type { SwellPathPoint, SwellPulse } from '../data/types';
+import { buildSwellSources, resolveSwellSources } from '../data/swellSources';
+import { sourceWeightAt, type SwellSourceState, type Vec3 } from '../data/swellField';
+import type { SwellPulse } from '../data/types';
 
 const RADIUS = 2;
 
@@ -63,23 +64,116 @@ function FillFrameCamera({ radius }: { radius: number }) {
   return null;
 }
 
+/**
+ * Publishes the on-screen position of Helena's brightest point for the
+ * Playwright checks (`?e2e=1` only).
+ *
+ * Round 14 removed the drawn marker this used to track, so it now reports
+ * the peak of her *packet*: the point at angular distance `rLead` along her
+ * travel great circle, where the comet envelope is 1.0 and the directional
+ * cone is 1.0 by construction — i.e. provably the brightest pixel she has.
+ * That is a better target than the old marker was, because it is defined by
+ * the same field the user is actually looking at.
+ *
+ * Hunting for it by sweeping screen coordinates is not viable here: every
+ * synthetic click waits on a software-rendered WebGL frame, so a grid search
+ * costs minutes per viewport.
+ */
+function MarkerProbe({ state, states }: { state: SwellSourceState | undefined; states: SwellSourceState[] }) {
+  useFrame(({ camera, size }) => {
+    // Lets `field-metrics.mjs` sample rendered pixels along a source's own
+    // travel great circle: it needs this scene's exact projection, and
+    // re-deriving a camera matrix outside the app would be one more copy of
+    // a fact that already lives here. Also publishes the resolved states so
+    // the harness compares pixels against the geometry actually on screen,
+    // not a re-computation of it.
+    (window as unknown as Record<string, unknown>).__moanaProject = (v: [number, number, number]) => {
+      const world = new Vector3(...v).multiplyScalar(RADIUS);
+      const ndc = world.clone().project(camera);
+      return {
+        x: (ndc.x * 0.5 + 0.5) * size.width,
+        y: (-ndc.y * 0.5 + 0.5) * size.height,
+        facing: world.dot(camera.position.clone().sub(world)) > 0,
+      };
+    };
+    (window as unknown as Record<string, unknown>).__moanaStates = states;
+
+    if (!state) return;
+    const o = new Vector3(...state.origin);
+    const d = new Vector3(...state.direction);
+    const peak = o.multiplyScalar(Math.cos(state.rLead)).add(d.multiplyScalar(Math.sin(state.rLead)));
+    const world = peak.clone().multiplyScalar(RADIUS);
+    const ndc = world.clone().project(camera);
+    (window as unknown as Record<string, unknown>).__moanaMarker = {
+      x: (ndc.x * 0.5 + 0.5) * size.width,
+      y: (-ndc.y * 0.5 + 0.5) * size.height,
+      // Facing the camera, i.e. on the near side of the globe.
+      facing: world.dot(camera.position.clone().sub(world)) > 0,
+    };
+  });
+  return null;
+}
+
 interface GlobeProps {
   pulse: SwellPulse;
-  currentPoint: SwellPathPoint;
+  /** App-load time — the anchor `offsetHours` is measured from. */
+  startTime: Date;
   /** Hours relative to app-load time, from the Timeline — round 9 threads this
       into GlobeSphere so the whole swell field advances with the scrubber,
       not just Helena's marker. See MASTER_BUILD_PLAN.md §11's round-9 entry. */
   offsetHours: number;
-  onSelectHelena: () => void;
+  /** Index of the selected source, or -1. */
+  selectedIndex: number;
+  onSelectSource: (index: number) => void;
 }
 
-export function Globe({ pulse, currentPoint, offsetHours, onSelectHelena }: GlobeProps) {
+/**
+ * Below this field weight a tap counts as open water and clears the
+ * selection, rather than snapping to whichever swell happens to be least
+ * far away. Sits above the noise floor but well under a packet's body, so
+ * the whole visible ribbon is tappable, not just its brightest core.
+ */
+const PICK_THRESHOLD = 0.02;
+
+export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSource }: GlobeProps) {
   const quality = useMemo(() => detectQualityTier(), []);
   // Idle rotation is decorative motion; honour a reduced-motion preference.
   // (It also makes the scene deterministic for the Playwright checks.)
   const reduceMotion = useMemo(
     () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false,
     [],
+  );
+
+  // The same states the shader is rendering, resolved once and shared with
+  // hit-testing — so tapping a swell and seeing a swell are one evaluation.
+  const sources = useMemo(() => buildSwellSources(pulse), [pulse]);
+  const states = useMemo(
+    () => resolveSwellSources(sources, startTime, offsetHours),
+    [sources, startTime, offsetHours],
+  );
+
+  const exposeMarker = useMemo(() => new URLSearchParams(window.location.search).has('e2e'), []);
+
+  /**
+   * Which swell did that tap land on? Argmax of the field's own per-source
+   * weight at the tapped point — the swell that is brightest under the
+   * finger wins, and open water clears the selection.
+   */
+  const handlePick = useCallback(
+    (unit: Vector3) => {
+      const p: Vec3 = [unit.x, unit.y, unit.z];
+      let best = -1;
+      let bestWeight = PICK_THRESHOLD;
+      states.forEach((s, i) => {
+        const w = sourceWeightAt(s, p);
+        if (w > bestWeight) {
+          bestWeight = w;
+          best = i;
+        }
+      });
+      onSelectSource(best);
+    },
+    [states, onSelectSource],
   );
 
   return (
@@ -94,8 +188,16 @@ export function Globe({ pulse, currentPoint, offsetHours, onSelectHelena }: Glob
       <Suspense fallback={null}>
         {/* Sparse, low-opacity, intentional — not scattered debug dots. */}
         <Stars radius={140} depth={60} count={500} factor={0.6} saturation={0} fade speed={0.2} />
-        <GlobeSphere radius={RADIUS} pulse={pulse} offsetHours={offsetHours} octaves={quality.octaves} />
-        <HelenaPath pulse={pulse} radius={RADIUS} currentPoint={currentPoint} onSelect={onSelectHelena} />
+        <GlobeSphere
+          radius={RADIUS}
+          pulse={pulse}
+          startTime={startTime}
+          offsetHours={offsetHours}
+          selectedIndex={selectedIndex}
+          onPick={handlePick}
+          octaves={quality.octaves}
+        />
+        {exposeMarker && <MarkerProbe state={states[0]} states={states} />}
       </Suspense>
 
       <OrbitControls
