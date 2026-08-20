@@ -154,16 +154,6 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
 
   const exposeMarker = useMemo(() => new URLSearchParams(window.location.search).has('e2e'), []);
 
-  // Round 16 A/B: ?filaments=travel orients the packet texture along the
-  // direction of travel (streamlines) instead of along the band (wave
-  // crests). A URL param rather than a rebuild, so the two can be rendered
-  // back to back in one session — in this sandbox a build-and-settle cycle
-  // costs about a minute, and the whole point is comparing the same frame.
-  const filamentAxis = useMemo(
-    () => (new URLSearchParams(window.location.search).get('filaments') === 'travel' ? 1 : 0),
-    [],
-  );
-
   /**
    * Which swell did that tap land on? Argmax of the field's own per-source
    * weight at the tapped point — the swell that is brightest under the
@@ -205,7 +195,6 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
           offsetHours={offsetHours}
           selectedIndex={selectedIndex}
           onPick={handlePick}
-          filamentAxis={filamentAxis}
           octaves={quality.octaves}
         />
         {exposeMarker && <MarkerProbe state={states[0]} states={states} />}

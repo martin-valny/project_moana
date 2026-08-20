@@ -452,46 +452,6 @@ export const SWELL_FIELD_GLSL = /* glsl */ `
     return mix(1.0, spreadRaw, poleFade);
   }
 
-  /**
-   * The fragment's position in the source's own polar frame: how far out
-   * from the storm, and what bearing around it, both as true arc lengths.
-   *
-   * Round 16 added this because the shader's anisotropic noise sampling had
-   * no valid space to live in. It used to decompose vPos along the flow
-   * tangent — but a tangent vector on a unit sphere is perpendicular to the
-   * position vector by construction, so dot(vPos, f) is identically zero
-   * (measured: 1.7e-16) and the whole "anisotropy" collapsed to a uniform
-   * scale. That is not repairable in place: vPos is the surface normal, so
-   * ANY matrix built from tangent axes leaves it untouched. The sampling
-   * space itself has to change.
-   *
-   * A radially propagating wave field already has a natural anisotropic
-   * coordinate system, which is this one. Returns (radial arc, tangential
-   * arc):
-   *
-   *  - x is the angular distance d, i.e. distance ACROSS a packet's band.
-   *  - y is bearing scaled by sin(d), which converts an angle into true arc
-   *    length — distance ALONG the band. Without the sin(d) factor filaments
-   *    would fan out and thin as a packet travelled, since a fixed bearing
-   *    spans more ocean the further out you go.
-   *
-   * Two singularities handle themselves here rather than needing guards.
-   * The bearing seam at +/-pi sits directly behind the storm, where the
-   * directional cone has already cut the field to zero. And as d -> 0,
-   * sin(d) -> 0 collapses the coordinate smoothly instead of spinning.
-   */
-  vec2 moanaSourceFrame(vec3 S, vec3 D, vec3 P, float d) {
-    // Fixed tangent basis at the source: D is the travel direction, E is
-    // ninety degrees around from it. Bearing is measured against this pair,
-    // so it is stable for the whole packet rather than varying per fragment.
-    vec3 E = normalize(cross(S, D));
-    vec3 raw = P - S * dot(S, P);
-    float len = length(raw);
-    vec3 toP = len > 1e-4 ? raw / len : D;
-    float bearing = atan(dot(toP, E), dot(toP, D));
-    return vec2(d, bearing * sin(d));
-  }
-
   // Mirrors sourceFlow() in swellField.ts.
   vec3 moanaFlow(vec3 S, vec3 D, vec3 P, float d) {
     float sp = dot(S, P);
