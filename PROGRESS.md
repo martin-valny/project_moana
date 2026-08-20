@@ -1,16 +1,32 @@
 # Project Moana — Progress Report
 
-Last updated: 2026-08-20, branch `claude/moana-master-build-plan-v2-zjs07y`.
-Working tree clean, everything below is pushed.
+Last updated: 2026-08-20, branch `claude/moana-master-build-plan-v2-zjs07y`,
+HEAD `1159d0f`. Working tree clean, everything below is pushed.
 
-**Rounds 14 and 15 have landed: the swell field is now dispersive packets
-rather than filled disc sectors, the colour signal moved from hue to
-brightness, Helena's drawn line and marker are gone from the globe entirely,
-the continents have been pushed back behind the water, and the panel glyph
-now tracks the scrubber. Awaiting the user's read on the look — every
-automated gate passes, but automated gates are not the same thing (round 13
-is the second time in this project a change passed every check and still was
-not what the user wanted).**
+**The current build is round 15.** Rounds 14 and 15 landed: the swell field is
+dispersive packets rather than filled disc sectors, the colour signal moved
+from hue to brightness, Helena's drawn line and marker are gone from the globe
+entirely, the continents sit behind the water, and the panel glyph tracks the
+scrubber.
+
+**Round 16 was built and then reverted at the user's request** — it fixed a
+real bug but the result looked wrong ("ugly"). `1159d0f` reverts `1856985`; the
+tree is byte-identical to round 15.
+
+> ### ⚠ Read this before touching the ocean shader
+>
+> **The shader's anisotropic noise sampling is a no-op, and has been since
+> round 9.** `f` is a tangent at `vPos`, so `dot(vPos, f) ≡ 0` (measured
+> 1.665e-16), which makes the "anisotropy" a uniform scale. Every frame from
+> round 9 to now has rendered **isotropic** noise while the comment above that
+> line insists it produces streaks.
+>
+> This is the standing explanation for why there are no filament structures in
+> the ocean, and no amount of colour, threshold or frequency work will produce
+> them while it holds. Round 16 fixed it, over-corrected the look, and was
+> reverted — so the bug is live again and the two gates that would catch it
+> (B2, M11) went with it. **See "Round 16" under Phase 0 before attempting
+> this again**; `git show 1856985` has the working fix.
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -25,9 +41,8 @@ product vision and rules; this file is the build/validation log against it.
 ## Status, one line
 
 **Phase −1 is passed (decided 2026-08-17). Phase 0's visual prototype
-(`phase-0-prototype/`) has had fourteen rounds: twelve landed, a thirteenth
-built and reverted, and round 14 — the current state — which rebuilt what a
-swell *is* rather than tuning how one is coloured.**
+(`phase-0-prototype/`) has had sixteen rounds: fourteen landed, and two built
+and reverted (13 and 16). The current state is round 15.**
 
 The user's two round-13 complaints ("I dont wna that line there... the swell
 movement, body, entity has to be intuitive *using color gradients, filament
@@ -51,19 +66,111 @@ the plan's own falsifiable test — five non-surfers timed on a physical phone �
 which no agent session can run itself, and which has not run yet.**
 
 **If you're picking this up cold, read in this order:** (1) this "Status"
-section, (2) "Round 15" and "Round 14" under "Phase 0" — the current state, the
-mechanisms, and the seven bugs the self-checking harness caught, (3) "The
-metrics harness" (in the round-14 entry) for how to re-run the gates, (4) "Round 13" for the reverted work's
-own diagnosis (still true, still useful — the ACES-at-extremes finding is load
-bearing in round 14's colour design), (5) "Round 12" for the bidirectional
-timeline and source spawn-in, (6) "Round 10" for lateral inhibition and
-pole-zone spirals, (7) "Round 9" for the swell-physics rework and its central
-lesson (verify uniform updates actually reach the GPU by checking object
-identity, not by reading back the JS value you just set — the two can silently
-diverge), (8) "Round 8" for how "measure the reference, don't describe it"
-found a large framing error, (9) "Round 7" for the real-texture rework,
-(10) "Round 6" for how to evaluate an external critique without trusting or
-dismissing it blindly, (11) skim "What was built" and rounds 2–5 for context.
+section and the warning box above it, (2) **"Round 16"** — the live no-op, why
+the fix was reverted, and what a future attempt must do differently, (3) "Round
+15" and "Round 14" for the current mechanisms and the bugs the harness caught,
+(4) "The metrics harness" (in the round-14 entry) for how to re-run the gates,
+(5) "Round 13" for the reverted colour work's own diagnosis (still true — the
+ACES-at-extremes finding is load bearing in round 14's colour design),
+(6) "Round 12" for the bidirectional timeline and source spawn-in, (7) "Round
+10" for lateral inhibition and pole-zone spirals, (8) "Round 9" for the
+swell-physics rework and its central lesson (verify uniform updates actually
+reach the GPU by checking object identity, not by reading back the JS value you
+just set — the two can silently diverge), (9) "Round 8" for how "measure the
+reference, don't describe it" found a large framing error, (10) "Round 7" for
+the real-texture rework, (11) "Round 6" for how to evaluate an external critique
+without trusting or dismissing it blindly, (12) skim "What was built" and rounds
+2–5 for context.
+
+**Recurring lesson worth internalising before you start.** Four separate bugs in
+this project have been the same shape: *two places holding what should be one
+fact, or a stated fact nobody measured.* The uniforms-cloning bug (round 9 — the
+ocean had never animated; seven rounds of screenshots were all plausible static
+frames), the hand-written heading contradicting its own waypoints, the 'WNW'
+label on an ENE path, and now the anisotropy no-op. In every case the code
+*said* the right thing in a comment and did something else, and in every case it
+was found late and by accident. **Measure the claim, don't read it.**
+
+## Where this stands right now, and what to pick up
+
+**Verified at HEAD `1159d0f`** (run 2026-08-20, after the round-16 revert):
+build and lint clean; Stage A 5/5; parity `B` 0.000368 against a 0.02
+tolerance; Stage C 9/9; `smoke-test.mjs` passes both viewports with zero
+console errors; `panel-glass-test.mjs` and `rotate-test.mjs` pass.
+
+| Gate | Measured | Threshold |
+|---|---|---|
+| M1 leading-edge dominance (model) | 0.03% of band width | ≤ 15% |
+| M4 still-frame asymmetry (model) | 4.68× | ≥ 3.0× |
+| M8 / M8b dynamic range, clipping | P99 ≥ 0.831; 0.868% of globe | ≥ 0.65; ≤ 1.5% |
+| M9 bands not a wash | 14.8% of globe | ≤ 22% |
+| B CPU/GPU parity | 0.000368 | ≤ 0.02 |
+| M2 brightness range on screen | **2.56×** | ≥ 2.5× |
+| M3 no violet leakage | 0 of 587,758 px | ≤ 0.1% |
+| M1p / M4p packet shape on screen | 0.92 × rLead; 3.53× | 1.0 ± 0.18; ≥ 1.25× |
+| M5a / M5b scrub advances, redraws | all edges advance; 29.6% px changed | — |
+| M7 glyph matches data | delta (0.00, 0.00)° | ≤ 1.5° |
+| M10 land subordinate to water | 0.684 | 0.35–0.90 |
+
+**M2 has under 3% of margin and is the gate most likely to flip** on any change
+to the colour chain or the land treatment (both move the ocean's luminance
+distribution). If it drops, the answer is more contrast in the bands, not a
+lower threshold.
+
+### Open items, roughly in priority order
+
+1. **The §8 gate has never run** — five non-surfers timed on a physical phone.
+   No agent session can run it, and Phase 0 is not finishable without it. This
+   is the single biggest outstanding item and it needs the user.
+2. **The anisotropy no-op is live** (see the warning box at the top, and
+   "Round 16"). It is the reason the ocean has no filament structure. Fixing it
+   is *not* optional if filaments are wanted — but round 16 shows that fixing
+   the mechanism without restraint on the look makes things worse. **Bring back
+   the B2 guard regardless**, even if no filament work follows: it is
+   sub-second, needs no rendering, and would have caught this in round 9.
+3. **Filament quality, if reattempted.** Round 16's "what a future attempt must
+   do differently" list is the brief: far subtler, per-filament brightness
+   variation, leave the domain warp alone, check the `crest` term, and do not
+   chase M11's number.
+4. **Nothing else is known-broken.** Land treatment and the panel glyph were the
+   user's two round-15 asks and both landed.
+
+### Things the user has decided, so don't re-litigate
+
+- **No purple.** Dropped in round 14 with the user's agreement, after measuring
+  that it never rendered. M3 now asserts zero red-dominant ocean pixels.
+- **No drawn line or marker on the globe.** Removed in round 14; the path lives
+  in the panel glyph only.
+- **Helena's front comes from her own waypoints**, not `Cg` — her track runs
+  2.6× slower than her stated period implies.
+- **Packet decay is floored** (~0.35–1.0 rather than the physical 0.10–1.0) so
+  swells stay legible across the whole scrubber.
+
+### Running the harness
+
+```bash
+cd phase-0-prototype
+npm install
+npm run build && npm run lint
+node --import ./ts-resolve-hook.mjs --experimental-strip-types field-metrics.mjs --cpu     # Stage A, seconds
+npm run preview -- --port 4173 &
+node --import ./ts-resolve-hook.mjs --experimental-strip-types parity-probe.mjs            # Stage B, ~1s
+node --import ./ts-resolve-hook.mjs --experimental-strip-types field-metrics.mjs --pixels  # Stage C, ~5 min
+node smoke-test.mjs && node panel-glass-test.mjs && node rotate-test.mjs
+node timeline-shots.mjs   # screenshots at every labelled stop, both viewports
+```
+
+**Do all geometry work in Stage A.** It runs against the TypeScript model with
+no renderer, so an iteration costs milliseconds against the ~60 s a screenshot
+costs in this sandbox (software WebGL, ~1.2 fps measured, and OrbitControls
+damping needs ~60 s of wall clock before frames are comparable). Four of round
+14's five bugs were caught there.
+
+**And do not let a green harness decide the look.** Rounds 13 and 16 both
+passed every automated check and were both rejected on sight. The gates prove a
+mechanism reaches the screen; only the user can say whether it should.
+
+---
 
 ## Round 14 planning (superseded — round 14 has since landed; see "Round 14" under Phase 0)
 
@@ -1177,6 +1284,180 @@ and "3 Days" show clear, monotonic growth of every source's front across
 the full range, the new stop's label legible with no collision, and a
 mostly-calm ocean at "-18h" where only the earliest-spawning invented
 sources have anything to show yet.
+
+### Round 16: the anisotropy no-op — found, fixed, reverted for looking wrong
+
+**Status: built, shown to the user, and reverted at their request ("ok, this is
+ugly .. revert it back before this itteration"). The code is gone; the bug it
+found is real and IS STILL PRESENT in the current build.** Retrieve the work
+with `git show 1856985` (the revert is `1159d0f`). Read this entry before
+attempting filaments again — most of it is still true.
+
+#### What prompted it
+
+After round 15 the user said: *"I still don't really see the filament ribbon
+structures you described so nice before?? Tell me why before you start doing
+anything."*
+
+They were right, and the reason was not tuning. It was a latent bug.
+
+#### The finding — the shader's anisotropy does nothing
+
+`GlobeSphere.tsx` decomposed the noise sample position along the flow tangent:
+
+```glsl
+vec3 along  = dot(vPos, f) * f;
+vec3 across = vPos - along;
+vec3 coord  = along * mix(1.0, alongScale, dirConfidence)
+            + across * mix(1.0, 1.75, dirConfidence);
+```
+
+`f` comes from `moanaFlow()` and is a **tangent at `vPos`**. A tangent vector on
+a unit sphere is perpendicular to the position vector by construction, so
+`dot(vPos, f)` is identically zero. Measured: **1.665e-16**. Therefore `along`
+is the zero vector, `across` is exactly `vPos`, and the whole expression
+reduces to a uniform scale — `|coord − vPos·B| = 2.5e-16`. **Isotropic.**
+
+The comment that sat directly above it read: *"The single most important line in
+this shader… Sampling isotropically can only ever produce curly, equal-sided
+blobs — no colour-ramp or threshold tuning turns those into streaks."* That
+comment is correct. The line beneath it had been doing exactly the thing it
+warned against.
+
+**It broke in round 9.** Before then `f` was a single global flow direction
+applied planet-wide — a fixed world-space vector, *not* tangent everywhere, so
+`dot(vPos, f)` was non-zero and the decomposition genuinely worked. Round 9
+replaced it with the per-fragment `away` tangent, which is tangent everywhere,
+and silently zeroed `along`. **Rounds 9 through 15 all rendered isotropic noise
+while every comment in the file said "streaks".** It also explains why round 10
+needed lateral inhibition for seams: the seams were real, but the stretch
+supposedly amplifying them was not there.
+
+#### Why it cannot be repaired in place
+
+`vPos` is the surface *normal*, so it has no component in the tangent plane.
+Any linear map built from tangent axes leaves it untouched:
+`outerProduct(t, t) * vPos = t * dot(t, vPos) = 0` for every tangent `t`. There
+is no matrix-on-position fix. **The sampling space itself has to change.**
+
+#### What was built (and reverted)
+
+Sample the noise in the dominant source's own polar frame — distance out from
+the storm, and arc length around it. A radially propagating wave field supplies
+that coordinate system for free, it is well-defined everywhere, and filament
+orientation becomes a single swap between its two axes.
+
+```glsl
+vec2 moanaSourceFrame(vec3 S, vec3 D, vec3 P, float d) {
+  vec3 E = normalize(cross(S, D));
+  vec3 raw = P - S * dot(S, P);
+  vec3 toP = length(raw) > 1e-4 ? normalize(raw) : D;
+  float bearing = atan(dot(toP, E), dot(toP, D));
+  return vec2(d, bearing * sin(d));   // radial arc, tangential arc
+}
+```
+
+The `sin(d)` converts bearing into true arc length, so filament *width* stays
+constant as a packet travels instead of fanning out. Two singularities handle
+themselves: the bearing seam at ±π sits behind the storm where the directional
+cone has already cut the field to zero, and as `d → 0` the `sin(d)` collapses
+the coordinate smoothly rather than spinning.
+
+**Three coupled defects found on the way, each independently fatal:**
+
+1. **`dirConfidence` collapsed cubically.** It was derived from
+   `length(flowAccum)` where `flowAccum += away * pow(w, 3.0)` — round 10's
+   lateral inhibition, which exists to sharpen which source wins the
+   *direction*. Reusing that cubed magnitude as a *confidence* meant `w = 0.3`
+   in a packet body gave `0.027 × 6 = 0.16`, so anisotropy would have applied
+   only at the brightest peaks even after the projection was fixed. Fixed by
+   deriving it from the un-cubed dominant weight.
+2. **Hard polygonal faceting.** Where two sources tie, the dominant polar frame
+   flips between two entirely different coordinate systems and the noise jumps
+   with it. Unlike a direction vector, two polar frames cannot be blended into a
+   meaningful third — so the fix is to fade to isotropic across the tie
+   (`smoothstep(0.55, 0.85, bestWeight / energyAccum)`).
+3. **One band ramp fed both the ambient ocean and the swell.** Narrowing it so
+   striations cross threshold crisply also turned the entire calm ocean into
+   high-contrast contour lines. Split into `ambient` (wide, soft) and `band`
+   (narrow, crisp, energy-gated).
+
+Filament frequency was also made proportional to band width, so filament
+**count** across a band stays constant. A fixed value cannot serve both a
+0.12 rad young packet and a 0.35 rad mature one: 6.5 gave a wavelength wider
+than a young band (under one filament across it), and 14 turned the +3 Days
+frame into contour spaghetti. Both failure modes were observed directly.
+
+#### The two gates it added — gone with the revert
+
+Nothing in the harness could see this bug, because every metric measured the
+packet *envelope* (M1/M4/M1p/M4p), its *range* (M2/M8), its *hue* (M3), its
+*motion* (M5) or its *coverage* (M9). **None measured whether the texture inside
+a packet has a direction at all.** That is precisely why a no-op survived six
+rounds of "the filaments look good".
+
+- **B2 (parity probe):** steps the same arc length radially and tangentially
+  from a point and asserts the two map to measurably different separations in
+  noise space. Under the reverted-to code that ratio is exactly 1.0. Sub-second,
+  no rendering. This is the cheapest possible guard against the whole bug class.
+- **M11 (pixel metrics):** luminance variance across the band vs along it,
+  median over 10 track pairs. Scored 2.74x with filaments visible; ~1.0 means
+  isotropic.
+
+Both had to be reverted with the rest: they would fail against the restored
+code — correctly — and a permanently-red gate is worse than none. **If you
+reattempt this, bring B2 back first.** It costs nothing and it is the check
+that would have caught this in round 9.
+
+#### Why it was reverted
+
+The mechanism worked and was measurable, but the result read as **topographic
+contour lines** — regular, hard-edged, evenly spaced. Legible as filaments,
+nothing like the reference's soft organic ribbons. The user's verdict was
+"ugly", and they were right.
+
+The mistake was mine and it is worth naming precisely: **I treated "filaments
+are measurable" as the goal when the goal was "filaments look like weather."**
+M11 went green while the frame got worse. A gate proving a mechanism reaches the
+screen says nothing about whether it should.
+
+#### What a future attempt must do differently
+
+- **Go far subtler.** The reverted version pushed contrast and frequency hard to
+  satisfy a threshold. Filaments should be a *texture* you notice on second
+  look, not the dominant feature of every band.
+- **Vary brightness between filaments.** Every striation rendered at the same
+  intensity, which is most of why it read as contour lines rather than water.
+  Real filaments differ from one another.
+- **Leave the domain warp alone.** It was cut from 0.34 to 0.06 mid-round on
+  evidence that later proved invalid (see the metric lessons below), and at 0.06
+  the filaments were ruler-straight. The warp is what makes them wander.
+- **Check the `crest` term.** It stacks a hard highlight on every band edge and
+  compounds the contour-line reading.
+- **Do not chase M11's number.** Set it low enough to catch the no-op (~1.6) and
+  judge the look by eye.
+
+#### Two metric lessons, both hard-won
+
+1. **Correlation length was the wrong statistic.** It reported 1.47x on a frame
+   whose radial-vs-tangential *variance* differed 5.49x, because fBm's high
+   octaves decay autocorrelation in **both** directions and compress the ratio
+   toward 1 regardless of how anisotropic the field is. Variance answers the
+   question directly and is robust to spectral content.
+2. **A single sample track is not reproducible on an animating field.** The same
+   probe swung **5.49x → 1.94x between two runs with no code change**, because
+   `uTime` moved the noise underneath it. This is round 13's lesson resurfacing
+   in a new place: never characterise an animating field from one fixed sample.
+   M11 ended up taking a median over 10 track pairs spread across bearing and
+   depth.
+
+A third, smaller: **M10's first baseline was wrong** in the same family — it
+compared land against seven sampled sea points that all happened to land in calm
+gaps between bands (18.8 mean, against 39 for water generally), which asks land
+to be darker than the darkest thing in frame. It now uses the ocean median over
+~590k pixels.
+
+---
 
 ### Round 15: land subordination and the glyph, both measured
 
