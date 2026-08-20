@@ -264,3 +264,153 @@ if (worst > TOLERANCE) {
 }
 
 console.log(`PASS  B  CPU/GPU parity — worst divergence ${worst.toFixed(6)}, tolerance ${TOLERANCE}`);
+
+// --- B2: the noise sampling stays isotropic --------------------------------
+//
+// Round 17 made isotropic sampling an explicit decision rather than an
+// accident, so this asserts the decision holds. The history is worth keeping
+// short: rounds 1-8 stretched the noise domain along the flow to produce
+// streaks; round 9 swapped in a per-fragment tangent and silently reduced the
+// whole thing to a uniform scale; rounds 9-16 rendered isotropic noise under a
+// comment insisting otherwise. Round 16 fixed it properly and the result was
+// rejected on sight — shown both frames side by side, the soft isotropic field
+// won. `git show 1856985` has the anisotropic implementation.
+//
+// So the gate runs in the direction the look actually went. It is not "no
+// anisotropy allowed, ever" — it is "a stretch cannot appear here without
+// somebody deciding to". Reintroducing one means updating this threshold in
+// the same commit, which is precisely the review moment that was missing when
+// round 9 removed the stretch by accident.
+//
+// The check: step the same arc length twice from a point, once radially away
+// from the storm and once tangentially around it, and map both through the
+// sampling transform. Equal real-world steps must land at equal separations in
+// noise space. Anything else means the domain has acquired a direction.
+//
+// It measures moanaNoiseCoord() from the shared GLSL — the same function the
+// ocean shader calls — rather than a JS reimplementation. A mirrored copy
+// would keep passing against a shader that had drifted away from it, which is
+// how the original bug survived six rounds in the first place.
+{
+  const ISO_TOLERANCE = 0.02;
+  const B2_FRAGMENT = `#version 300 es
+precision highp float;
+out vec4 fragColor;
+uniform vec3 uP;
+uniform float uDirConfidence;
+uniform int uComp;
+
+${SWELL_FIELD_GLSL}
+
+vec4 packFloat(float v) {
+  vec4 enc = fract(vec4(1.0, 255.0, 65025.0, 16581375.0) * v);
+  enc -= enc.yzww * vec4(1.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0, 0.0);
+  return enc;
+}
+
+void main() {
+  vec3 c = moanaNoiseCoord(normalize(uP), uDirConfidence);
+  float v = uComp == 0 ? c.x : (uComp == 1 ? c.y : c.z);
+  fragColor = packFloat(clamp((v + 4.0) / 8.0, 0.0, 1.0));
+}`;
+
+  const norm3 = (v) => {
+    const l = Math.hypot(...v);
+    return v.map((x) => x / l);
+  };
+  const cross3 = (a, b) => [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+
+  // A storm at 55S 175W, travelling local-east, and a point 40 degrees out
+  // along that travel direction — well inside a mature packet.
+  const latS = -55 * D2R;
+  const lonS = -175 * D2R;
+  const S = norm3([Math.cos(latS) * Math.cos(lonS), Math.sin(latS), Math.cos(latS) * Math.sin(lonS)]);
+  const Dv = norm3(cross3([0, 1, 0], S));
+  const E = norm3(cross3(S, Dv));
+
+  const a0 = 40 * D2R;
+  const stepRad = 2 * D2R;
+  const at = (arc, bearing) => {
+    const dir = [0, 1, 2].map((i) => Dv[i] * Math.cos(bearing) + E[i] * Math.sin(bearing));
+    return [0, 1, 2].map((i) => S[i] * Math.cos(arc) + dir[i] * Math.sin(arc));
+  };
+
+  const samples = {
+    p0: at(a0, 0),
+    radial: at(a0 + stepRad, 0),
+    // Equal arc length tangentially needs a bearing offset of step / sin(a0),
+    // because a bearing sweep at distance d covers sin(d) times as much arc.
+    tangential: at(a0, stepRad / Math.sin(a0)),
+  };
+
+  const b2Browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
+  const b2Page = await b2Browser.newPage();
+  const coords = await b2Page.evaluate(
+    ({ VERTEX, FRAGMENT, samples, dirConfidence }) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1;
+      canvas.height = 1;
+      const gl = canvas.getContext('webgl2');
+      if (!gl) throw new Error('no webgl2');
+      const compile = (type, source) => {
+        const sh = gl.createShader(type);
+        gl.shaderSource(sh, source);
+        gl.compileShader(sh);
+        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+        return sh;
+      };
+      const prog = gl.createProgram();
+      gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERTEX));
+      gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAGMENT));
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+      gl.useProgram(prog);
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      const aPos = gl.getAttribLocation(prog, 'aPos');
+      gl.enableVertexAttribArray(aPos);
+      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+      gl.uniform1f(gl.getUniformLocation(prog, 'uDirConfidence'), dirConfidence);
+      const px = new Uint8Array(4);
+      const readComponent = (P, comp) => {
+        gl.uniform3fv(gl.getUniformLocation(prog, 'uP'), P);
+        gl.uniform1i(gl.getUniformLocation(prog, 'uComp'), comp);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        const packed = px[0] / 255 + px[1] / 65025 + px[2] / 16581375 + px[3] / 4228250625;
+        return packed * 8 - 4;
+      };
+      const out = {};
+      for (const [key, P] of Object.entries(samples)) {
+        out[key] = [0, 1, 2].map((c) => readComponent(P, c));
+      }
+      return out;
+    },
+    { VERTEX, FRAGMENT: B2_FRAGMENT, samples, dirConfidence: 1.0 },
+  );
+  await b2Browser.close();
+
+  const sep = (a, b) => Math.hypot(...a.map((x, i) => x - b[i]));
+  const radialSep = sep(coords.p0, coords.radial);
+  const tangentialSep = sep(coords.p0, coords.tangential);
+  const ratio = Math.max(radialSep, tangentialSep) / Math.max(Math.min(radialSep, tangentialSep), 1e-9);
+
+  console.log(
+    `\nequal ${(stepRad / D2R).toFixed(1)}-degree steps map to noise-space separations ` +
+      `${radialSep.toFixed(5)} (radial) vs ${tangentialSep.toFixed(5)} (tangential)`,
+  );
+  if (Math.abs(ratio - 1.0) > ISO_TOLERANCE) {
+    console.error(
+      `FAIL  B2  noise sampling is no longer isotropic — ratio ${ratio.toFixed(4)}, ` +
+        `expected 1.0 +/- ${ISO_TOLERANCE}. If a stretch was reintroduced deliberately, ` +
+        `update this threshold in the same commit and say so in the message.`,
+    );
+    process.exit(1);
+  }
+  console.log(`PASS  B2  noise sampling is isotropic — ratio ${ratio.toFixed(4)}, expected 1.0 +/- ${ISO_TOLERANCE}`);
+}

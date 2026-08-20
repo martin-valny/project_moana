@@ -305,46 +305,45 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // being independent decorations.
       float periodMix = smoothstep(uPeriodHueMin, uPeriodHueMax, domPeriod);
 
-      // --- Anisotropic noise domain -----------------------------------
-      // The single most important line in this shader. Splitting the sample
-      // position into components along and across the flow direction and
-      // scaling them unequally makes features longer along the flow than
-      // across it. Sampling isotropically (as early rounds did) can only
-      // ever produce curly, equal-sided blobs — no colour-ramp or threshold
-      // tuning turns those into streaks.
+      // --- Noise domain: isotropic, by decision --------------------------
+      // The sample position is scaled uniformly. There is no along-flow
+      // stretch, and that is deliberate as of round 17 — not an oversight.
       //
-      // Round 9: ratio brought down from ~10:1 to 5:1 at full confidence.
-      // Direction now genuinely varies across the globe instead of being one
-      // constant everywhere, so less stretch is needed to read as flow —
-      // 10:1 was a large part of what earlier rounds' feedback called
-      // "smeared".
+      // History, because the comment that used to sit here was actively
+      // misleading and cost six rounds. Rounds 1-8 stretched the sample
+      // along the flow to turn noise blobs into streaks. Round 9 replaced
+      // the single global flow vector with the per-fragment tangent f,
+      // which silently killed the stretch: f is a tangent at vPos, so
+      // dot(vPos, f) is identically zero (measured 1.665e-16), the
+      // along-component was the zero vector, and the expression collapsed
+      // to exactly the uniform scale below. Rounds 9-16 all rendered
+      // isotropic noise beneath a comment insisting they produced streaks.
       //
-      // dirConfidence, and blending the ratio itself toward isotropic as it
-      // drops, exists to fix a real artifact the first version of this
-      // shipped with: "direction away from a point on a sphere" is a vector
-      // field with a singularity exactly at that point (the same reason you
-      // can't comb a hairy ball flat at the poles) — direction rotates
-      // arbitrarily fast in the small neighbourhood around every source's
-      // own origin. Stretched 5:1 through the noise sample, that showed up
-      // as a sharp-edged diamond artifact right at Helena's origin. flowMag
-      // (the un-normalised sum, before it collapses to a unit vector) is
-      // small both there AND in genuinely calm water far from any source —
-      // exactly the two places a confident direction shouldn't be trusted —
-      // so it doubles as the fade signal for free.
-      // poleConfidence multiplies in here too: near a source's own origin,
-      // away is now locked to the stable D (see above), so flowMag alone
-      // reads as high confidence even though the direction is only stable
-      // because it's pinned, not because the field has actually organised
-      // — exactly the zone the spiral artifact came from.
+      // It is not repairable in place: vPos is the surface normal, so any
+      // linear map built from tangent axes leaves it untouched. Round 16
+      // fixed it properly by sampling in the dominant source's own polar
+      // frame — and the result was rejected on sight ("ugly": hard, evenly
+      // spaced contour lines, nothing like water). Shown the two frames
+      // side by side afterwards, the user preferred this soft isotropic
+      // field again, so it stands as the chosen look.
+      //
+      // git show 1856985 has the working anisotropic implementation if
+      // this is ever revisited. B2 in parity-probe.mjs asserts the sampling
+      // stays isotropic so a stretch cannot creep back in unnoticed.
+      //
+      // dirConfidence survives the simplification and is still load
+      // bearing: it gates the flow travel and domain warp below. "Direction
+      // away from a point on a sphere" has a singularity at that point (the
+      // hairy-ball problem), so direction rotates arbitrarily fast near
+      // every source's origin — that shipped once as a sharp diamond
+      // artifact at Helena's origin. flowMag is small both there and in
+      // genuinely calm water, exactly the two places direction shouldn't be
+      // trusted, so it doubles as the fade signal for free. poleConfidence
+      // multiplies in because near a source's origin away is locked to
+      // the stable D, which reads as high confidence only because it is
+      // pinned, not because the field has organised.
       float dirConfidence = clamp(flowMag * 6.0, 0.0, 1.0) * poleConfidence;
-      vec3 along = dot(vPos, f) * f;
-      vec3 across = vPos - along;
-      // Round 14: the along-flow scale is now period-dependent rather than a
-      // flat 0.35 for every source — roughly 3.9:1 for a 13 s wind-swell up
-      // to 8:1 for a 17 s groundswell. Same mechanism as before, just no
-      // longer pretending every swell has the same texture.
-      float alongScale = mix(0.45, 0.22, periodMix);
-      vec3 coord = along * mix(1.0, alongScale, dirConfidence) + across * mix(1.0, 1.75, dirConfidence);
+      vec3 coord = moanaNoiseCoord(vPos, dirConfidence);
 
       // Travel along the flow, plus a slow independent evolution so the
       // field never reads as a rigid texture sliding past.

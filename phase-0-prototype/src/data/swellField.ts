@@ -462,6 +462,17 @@ export const SWELL_FIELD_GLSL = /* glsl */ `
     return normalize(mix(D, away, poleFade));
   }
 
+  // The noise sampling domain, isotropic by decision — the full history and
+  // reasoning is at the call site in GlobeSphere.tsx. It lives here, in the
+  // shared GLSL, rather than inline in the ocean shader for one reason: B2 in
+  // parity-probe.mjs measures THIS function. A probe that reimplemented the
+  // transform in JS would keep passing against a copy that had drifted from
+  // the shader, which is the exact bug shape (two places holding one fact)
+  // that let the anisotropy no-op survive rounds 9 through 16.
+  vec3 moanaNoiseCoord(vec3 P, float dirConfidence) {
+    return P * mix(1.0, 1.75, dirConfidence);
+  }
+
   // Mirrors sourceWeightAt() in swellField.ts.
   float moanaSourceWeight(vec3 S, vec3 D, vec3 P, float rLead, float rTrail, float amp, float d) {
     float env = moanaCometEnvelope(d, rLead, rTrail);

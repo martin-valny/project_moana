@@ -1,32 +1,38 @@
 # Project Moana — Progress Report
 
-Last updated: 2026-08-20, branch `claude/moana-master-build-plan-v2-zjs07y`,
-HEAD `1159d0f`. Working tree clean, everything below is pushed.
+Last updated: 2026-08-20, branch `claude/moana-master-build-plan-v2-zjs07y`.
+Working tree clean, everything below is pushed.
 
-**The current build is round 15.** Rounds 14 and 15 landed: the swell field is
-dispersive packets rather than filled disc sectors, the colour signal moved
-from hue to brightness, Helena's drawn line and marker are gone from the globe
-entirely, the continents sit behind the water, and the panel glyph tracks the
-scrubber.
+**The current build is round 17.** Rounds 14 and 15 landed the current visual
+model: dispersive packets rather than filled disc sectors, brightness rather
+than hue as the strength signal, no drawn line or marker for Helena, the
+continents behind the water, and a panel glyph that tracks the scrubber.
+Round 17 changed no pixels — it settled the filament question and cleaned up
+after it.
 
-**Round 16 was built and then reverted at the user's request** — it fixed a
-real bug but the result looked wrong ("ugly"). `1159d0f` reverts `1856985`; the
-tree is byte-identical to round 15.
-
-> ### ⚠ Read this before touching the ocean shader
+> ### The filament question is closed — read this before "fixing" the shader
 >
-> **The shader's anisotropic noise sampling is a no-op, and has been since
-> round 9.** `f` is a tangent at `vPos`, so `dot(vPos, f) ≡ 0` (measured
-> 1.665e-16), which makes the "anisotropy" a uniform scale. Every frame from
-> round 9 to now has rendered **isotropic** noise while the comment above that
-> line insists it produces streaks.
+> The ocean's noise sampling is **isotropic on purpose.** It is not a bug and
+> it is not waiting to be fixed.
 >
-> This is the standing explanation for why there are no filament structures in
-> the ocean, and no amount of colour, threshold or frequency work will produce
-> them while it holds. Round 16 fixed it, over-corrected the look, and was
-> reverted — so the bug is live again and the two gates that would catch it
-> (B2, M11) went with it. **See "Round 16" under Phase 0 before attempting
-> this again**; `git show 1856985` has the working fix.
+> It *was* a bug for a long time: rounds 1-8 stretched the noise domain along
+> the flow to produce streaks, round 9 replaced the global flow vector with a
+> per-fragment tangent, and that silently reduced the stretch to a uniform
+> scale (`f` is a tangent at `vPos`, so `dot(vPos, f) ≡ 0`, measured
+> 1.665e-16). Rounds 9-16 rendered isotropic noise under a comment insisting
+> they produced streaks.
+>
+> Round 16 found it and fixed it properly. The user rejected the result on
+> sight — "ugly", and it was: hard, evenly spaced contour lines. Shown both
+> frames side by side afterwards, they chose the soft field: *"the first/left
+> image is way better."* **So this is now the chosen look, arrived at by
+> comparison rather than by accident.**
+>
+> Round 17 deleted the dead code and the misleading comment, and inverted the
+> guard: `B2` in `parity-probe.mjs` now asserts the sampling **stays**
+> isotropic, so a stretch cannot reappear without someone deciding to.
+> `git show 1856985` has the working anisotropic implementation if this is
+> ever revisited.
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -41,8 +47,14 @@ product vision and rules; this file is the build/validation log against it.
 ## Status, one line
 
 **Phase −1 is passed (decided 2026-08-17). Phase 0's visual prototype
-(`phase-0-prototype/`) has had sixteen rounds: fourteen landed, and two built
-and reverted (13 and 16). The current state is round 15.**
+(`phase-0-prototype/`) has had seventeen rounds: fifteen landed, and two built
+and reverted (13 and 16). The current state is round 17.**
+
+**Filaments are no longer an open thread.** Round 16's mechanism worked and was
+rejected on looks; shown both renders side by side the user chose the soft
+isotropic field, so it is the decided look and round 17 tidied up behind that
+decision without moving a pixel. What remains blocking Phase 0 is the §8 gate —
+five non-surfers, a physical phone — and nothing in the shader.
 
 The user's two round-13 complaints ("I dont wna that line there... the swell
 movement, body, entity has to be intuitive *using color gradients, filament
@@ -66,8 +78,9 @@ the plan's own falsifiable test — five non-surfers timed on a physical phone �
 which no agent session can run itself, and which has not run yet.**
 
 **If you're picking this up cold, read in this order:** (1) this "Status"
-section and the warning box above it, (2) **"Round 16"** — the live no-op, why
-the fix was reverted, and what a future attempt must do differently, (3) "Round
+section and the box above it, (2) **"Round 17"** — how the filament question
+was closed and what the B2 gate now asserts, then **"Round 16"** for the
+mechanism it decided against, (3) "Round
 15" and "Round 14" for the current mechanisms and the bugs the harness caught,
 (4) "The metrics harness" (in the round-14 entry) for how to re-run the gates,
 (5) "Round 13" for the reverted colour work's own diagnosis (still true — the
@@ -87,16 +100,25 @@ this project have been the same shape: *two places holding what should be one
 fact, or a stated fact nobody measured.* The uniforms-cloning bug (round 9 — the
 ocean had never animated; seven rounds of screenshots were all plausible static
 frames), the hand-written heading contradicting its own waypoints, the 'WNW'
-label on an ENE path, and now the anisotropy no-op. In every case the code
-*said* the right thing in a comment and did something else, and in every case it
-was found late and by accident. **Measure the claim, don't read it.**
+label on an ENE path, and the anisotropy no-op. In every case the code *said*
+the right thing in a comment and did something else, and in every case it was
+found late and by accident. **Measure the claim, don't read it.**
+
+The anisotropy one is now closed twice over: the dead code is gone, and `B2`
+asserts the property the comment claims. That is the pattern worth copying —
+when a comment states a fact about the code, prefer a sub-second gate over a
+sentence. Rounds 9-16 would have been very different with one.
 
 ## Where this stands right now, and what to pick up
 
-**Verified at HEAD `1159d0f`** (run 2026-08-20, after the round-16 revert):
-build and lint clean; Stage A 5/5; parity `B` 0.000368 against a 0.02
-tolerance; Stage C 9/9; `smoke-test.mjs` passes both viewports with zero
+**Verified after round 17** (run 2026-08-20): build and lint clean; Stage A
+5/5; parity `B` 0.000368 against a 0.02 tolerance and `B2` 1.0001 against
+1.0 ± 0.02; Stage C 9/9; `smoke-test.mjs` passes both viewports with zero
 console errors; `panel-glass-test.mjs` and `rotate-test.mjs` pass.
+
+Round 17 is a no-pixel change, and the numbers below confirm it: every gate
+landed within normal run-to-run animation variance of its round-15 value
+(M2 2.56→2.57, M4p 3.53→3.56, M10 0.684→0.689).
 
 | Gate | Measured | Threshold |
 |---|---|---|
@@ -105,12 +127,13 @@ console errors; `panel-glass-test.mjs` and `rotate-test.mjs` pass.
 | M8 / M8b dynamic range, clipping | P99 ≥ 0.831; 0.868% of globe | ≥ 0.65; ≤ 1.5% |
 | M9 bands not a wash | 14.8% of globe | ≤ 22% |
 | B CPU/GPU parity | 0.000368 | ≤ 0.02 |
-| M2 brightness range on screen | **2.56×** | ≥ 2.5× |
-| M3 no violet leakage | 0 of 587,758 px | ≤ 0.1% |
-| M1p / M4p packet shape on screen | 0.92 × rLead; 3.53× | 1.0 ± 0.18; ≥ 1.25× |
+| B2 sampling stays isotropic | 1.0001 | 1.0 ± 0.02 |
+| M2 brightness range on screen | **2.57×** | ≥ 2.5× |
+| M3 no violet leakage | 0 of 587,885 px | ≤ 0.1% |
+| M1p / M4p packet shape on screen | 0.90 × rLead; 3.56× | 1.0 ± 0.18; ≥ 1.25× |
 | M5a / M5b scrub advances, redraws | all edges advance; 29.6% px changed | — |
 | M7 glyph matches data | delta (0.00, 0.00)° | ≤ 1.5° |
-| M10 land subordinate to water | 0.684 | 0.35–0.90 |
+| M10 land subordinate to water | 0.689 | 0.35–0.90 |
 
 **M2 has under 3% of margin and is the gate most likely to flip** on any change
 to the colour chain or the land treatment (both move the ocean's luminance
@@ -120,23 +143,30 @@ lower threshold.
 ### Open items, roughly in priority order
 
 1. **The §8 gate has never run** — five non-surfers timed on a physical phone.
-   No agent session can run it, and Phase 0 is not finishable without it. This
-   is the single biggest outstanding item and it needs the user.
-2. **The anisotropy no-op is live** (see the warning box at the top, and
-   "Round 16"). It is the reason the ocean has no filament structure. Fixing it
-   is *not* optional if filaments are wanted — but round 16 shows that fixing
-   the mechanism without restraint on the look makes things worse. **Bring back
-   the B2 guard regardless**, even if no filament work follows: it is
-   sub-second, needs no rendering, and would have caught this in round 9.
-3. **Filament quality, if reattempted.** Round 16's "what a future attempt must
-   do differently" list is the brief: far subtler, per-filament brightness
-   variation, leave the domain warp alone, check the `crest` term, and do not
-   chase M11's number.
-4. **Nothing else is known-broken.** Land treatment and the panel glyph were the
-   user's two round-15 asks and both landed.
+   No agent session can run it, and Phase 0 is not finishable without it. With
+   filaments closed, this is not merely the biggest outstanding item, it is
+   very nearly the only one, and it needs the user.
+2. **Phase 1 ingestion has not been started**, and is worth starting in
+   parallel rather than after — it does not depend on the §8 gate. The reason
+   to bring it forward: the round 14/15 visual model contains accommodations to
+   invented data. Packet decay is floored at ~0.35 instead of the physical 0.10
+   so swells stay legible across the scrubber, and Helena's front comes from
+   her own waypoints because her track runs 2.6× slower than her stated period
+   implies. Both are defensible for a prototype, and both are untested against
+   real messiness. Every further round of art direction tuned to a 20-waypoint
+   fiction raises the chance that Phase 2's "swap in real data" becomes "retune
+   the whole visual." A thin spike — one real event, real grid, derived energy
+   as H²×T — answers that now. §8's Phase 1 already asks for exactly this
+   sanity check.
+3. **Nothing is known-broken.** Land treatment and the panel glyph were the
+   user's two round-15 asks and both landed. Filaments are decided, not
+   deferred (see the box at the top). Round 17 left the frame untouched.
 
 ### Things the user has decided, so don't re-litigate
 
+- **Isotropic ocean sampling, no filaments.** Decided in round 17 by direct
+  comparison of both renders. The soft field is the chosen look, not a
+  limitation being worked around. `B2` guards it.
 - **No purple.** Dropped in round 14 with the user's agreement, after measuring
   that it never rendered. M3 now asserts zero red-dominant ocean pixels.
 - **No drawn line or marker on the globe.** Removed in round 14; the path lives
@@ -1285,13 +1315,106 @@ the full range, the new stop's label legible with no collision, and a
 mostly-calm ocean at "-18h" where only the earliest-spawning invented
 sources have anything to show yet.
 
+### Round 17: closing the filament question, and a guard that points the other way
+
+**Status: landed. No pixels changed — verified by the full harness, every gate
+within run-to-run animation variance of its round-15 value.**
+
+#### What prompted it
+
+Round 16 was reverted for looking wrong, which left the project in an awkward
+place: a known bug live in the shader, a comment above it asserting the
+opposite, and the two gates that would have caught it thrown away with the
+revert. The open-items list carried "fix the anisotropy no-op" as priority 2
+with a note that it was "*not* optional if filaments are wanted."
+
+Nobody had actually checked whether filaments were still wanted. Round 16's
+frame had been seen alone, judged "ugly", and reverted — it had never been put
+next to the alternative.
+
+So it was: both commits built, the same "+3 Days" frame rendered from each at
+the same viewport and camera, and the same ocean region cropped from both. The
+user's answer was immediate — *"well the first/left image is way better"* —
+choosing the soft isotropic field over the anisotropic one.
+
+**That converts a bug into a decision.** The measurements either side of the
+comparison:
+
+| | current (round 15/17) | round 16 (reverted) |
+|---|---|---|
+| B2 anisotropy ratio | 1.000 | 11.248 |
+| reads as | soft, smoky, directionless | hard, evenly spaced contour lines |
+| verdict | **chosen** | rejected on sight, twice |
+
+#### What changed in the code
+
+Nothing that renders. The anisotropy decomposition was already a no-op, so
+deleting it is provably behaviour-preserving rather than a re-tune:
+
+```glsl
+vec3 along  = dot(vPos, f) * f;   // identically 0 — f is a tangent at vPos
+vec3 across = vPos - along;       // therefore exactly vPos
+vec3 coord  = along * mix(1.0, alongScale, dirConfidence)
+            + across * mix(1.0, 1.75, dirConfidence);
+```
+
+collapses to `vPos * mix(1.0, 1.75, dirConfidence)`, measured 2.5e-16 apart.
+`alongScale` died with it. Three things deliberately survived: `dirConfidence`,
+`flowMag` and `poleConfidence` still gate the flow travel and domain warp
+below, and `periodMix` still drives hue — the stretch was only ever one of its
+consumers.
+
+The long comment above it was the actual liability and is now replaced by one
+that says what the code does, with the history that explains why the previous
+comment said something else for six rounds.
+
+#### The guard, pointed the other way
+
+`B2` came back, inverted. Round 16's version asserted the sampling *is*
+anisotropic; as a permanent gate that would demand a look the user has now
+rejected twice. So it asserts the opposite: equal arc-length steps taken
+radially and tangentially from a point must map to equal separations in noise
+space, ratio 1.0 ± 0.02. Measured 1.0001.
+
+This is not "anisotropy is banned." It is "a stretch cannot appear here without
+someone deciding to" — the review moment that was missing when round 9 removed
+one by accident. Reintroducing a stretch means updating this threshold in the
+same commit, which is exactly the conversation that should happen.
+
+**One thing was fixed on the way in.** Round 16's B2 was a JS reimplementation
+of the frame function, commented "Mirrors moanaSourceFrame() in
+swellField.ts" — the same two-places-holding-one-fact shape that let the
+original bug survive, and a probe that would happily pass against a shader that
+had drifted from its copy. The transform now lives in the shared
+`SWELL_FIELD_GLSL` as `moanaNoiseCoord()`, and B2 compiles and measures **that
+function**, the one the ocean shader calls. There is no second copy to drift.
+
+#### The lesson, which is round 16's lesson inverted
+
+Round 16's stated mistake was treating "filaments are measurable" as the goal
+when the goal was "filaments look like weather." The follow-on mistake, nearly
+made here, was treating "the bug is real" as sufficient reason to fix it. It
+was real, it was fixed correctly, and fixing it made the product worse.
+
+**A correct diagnosis does not entitle you to the repair.** What settled it was
+not more analysis but the cheapest possible experiment: build both, render the
+same frame, put them side by side, ask. That took about fifteen minutes against
+six rounds of the question staying open.
+
 ### Round 16: the anisotropy no-op — found, fixed, reverted for looking wrong
 
 **Status: built, shown to the user, and reverted at their request ("ok, this is
-ugly .. revert it back before this itteration"). The code is gone; the bug it
-found is real and IS STILL PRESENT in the current build.** Retrieve the work
-with `git show 1856985` (the revert is `1159d0f`). Read this entry before
-attempting filaments again — most of it is still true.
+ugly .. revert it back before this itteration"). Superseded by round 17, which
+closed the question this entry left open: shown both renders side by side the
+user chose the soft isotropic field, so the sampling is now isotropic *by
+decision* and the dead code and its misleading comment are gone.** Retrieve the
+anisotropic implementation with `git show 1856985` (the revert is `1159d0f`).
+
+The entry below is kept because its diagnosis is still correct and still the
+best explanation of why the ocean has no filament structure. What has changed
+is the conclusion: this is no longer a bug awaiting a fix, and the "what a
+future attempt must do differently" list at the end is now a brief for a
+direction nobody is currently taking. Read round 17 first.
 
 #### What prompted it
 
