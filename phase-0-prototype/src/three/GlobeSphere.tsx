@@ -108,7 +108,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
     // keeps its land legible as land while still being very dark. Raising
     // this is what lets the land base itself stay dark without the
     // continents dissolving into featureless holes.
-    float stroke = smoothstep(0.30, 0.5, m) * smoothstep(0.70, 0.5, m) * 0.20;
+    float stroke = smoothstep(0.30, 0.5, m) * smoothstep(0.70, 0.5, m) * 0.26;
 
     // Round 7: real Earth imagery (night-lights — continent structure and
     // city-light warmth, already close to this app's own dark navy palette)
@@ -144,7 +144,24 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // with the ocean for attention when §5.1 wants them as orientation
       // only. Steeper curve, lower gain: enough relief to see a coastline
       // and a hint of landform, not a legible terrain map.
-      color = uLandColor + vec3(0.34, 0.33, 0.31) * pow(nightLum, 1.8) * 0.62;
+      //
+      // Round 15 pulled back once more, this time against a measurement
+      // rather than an impression. The complaint was that the continents
+      // "read heavy", which sounds like they are too dark — they were not.
+      // Sampled at interior points they came out at mean luminance 39.6
+      // against an ocean median of 37: land and water were sitting at
+      // essentially the SAME brightness. Nothing was pushing land back, so
+      // a large contiguous mass of static speckled terrain competed on
+      // equal terms with the moving water around it, and read as a hole
+      // punched through the field.
+      //
+      // Two changes, both about subordination rather than darkness for its
+      // own sake: a base that genuinely sits below the water's mid-tone,
+      // and a steeper, weaker terrain lift so the speckle stops rivalling
+      // the ocean's filaments texturally. §5.1 wants land as orientation
+      // only. M10 in field-metrics.mjs now holds the ratio in range, so
+      // this cannot drift back on some later palette pass.
+      color = uLandColor + vec3(0.34, 0.33, 0.31) * pow(nightLum, 2.3) * 0.30;
     } else {
       // --- Swell propagation: per-fragment direction and energy --------
       // Each source contributes a dispersive packet (../data/swellField.ts):
@@ -670,7 +687,7 @@ export function GlobeSphere({ radius, pulse, startTime, offsetHours, selectedInd
       // ribbons are a *desaturated* steel blue rather than a saturated
       // royal blue, and its green is a muted olive-emerald, not a vivid
       // teal. Saturation was as much of the mismatch as brightness was.
-      uLandColor: { value: new THREE.Color('#16293f') },
+      uLandColor: { value: new THREE.Color('#0c1727') },
       uCoastColor: { value: new THREE.Color('#9fb4c6') },
       uOceanDeep: { value: new THREE.Color('#0a1c33') },
       uOceanMid: { value: new THREE.Color('#356da4') },

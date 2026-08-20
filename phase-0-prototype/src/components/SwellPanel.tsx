@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { SWELL_CORE, SWELL_MID } from '../three/swellPalette';
+import { SWELL_CORE, SWELL_DEEP, SWELL_MID } from '../three/swellPalette';
 import type { SwellPathPoint, SwellPulse } from '../data/types';
 import styles from './SwellPanel.module.css';
 
@@ -14,6 +14,31 @@ interface SwellPanelProps {
 const VIEW_W = 200;
 const VIEW_H = 74;
 const PAD = 9;
+
+/**
+ * Catmull-Rom through every point, emitted as cubic beziers.
+ *
+ * The waypoints are 6 h apart and only 20 in number, so a straight-segment
+ * polyline visibly kinks at each one at this scale. This passes through
+ * every waypoint exactly — the track is not being smoothed *away*, only
+ * drawn without corners. Same technique, and the same reason, as the curve
+ * the globe's own path used before round 14 deleted it.
+ */
+function smoothPath(pts: readonly [number, number][]): string {
+  if (pts.length < 2) return '';
+  const f = (n: number) => n.toFixed(1);
+  let d = `M${f(pts[0][0])} ${f(pts[0][1])}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] ?? pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] ?? p2;
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
+    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    d += ` C${f(c1[0])} ${f(c1[1])} ${f(c2[0])} ${f(c2[1])} ${f(p2[0])} ${f(p2[1])}`;
+  }
+  return d;
+}
 
 /**
  * Projects the pulse's real waypoints into the glyph's viewBox.
@@ -53,9 +78,22 @@ export function SwellPanel({ pulse, currentPoint, shortLabel, isFollowed, onTogg
   const glyph = useMemo(() => {
     const project = projectPath(pulse.path);
     const points = pulse.path.map((p) => project(p.lon, p.lat));
-    const d = points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' ');
     const [cx, cy] = project(currentPoint.lon, currentPoint.lat);
-    return { d, cx, cy };
+
+    // Where "now" sits, measured along the gradient's OWN axis.
+    //
+    // A linearGradient with x1=0,x2=1 interpolates across the element's
+    // horizontal extent, so its stop offsets are fractions of x — not of arc
+    // length along the path. Measuring progress any other way lands the
+    // bright point near the dot rather than on it, which on a glyph this
+    // small is the difference between the highlight meaning "here" and
+    // meaning nothing.
+    const xs = points.map(([x]) => x);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const progress = maxX > minX ? Math.max(0.02, Math.min(0.98, (cx - minX) / (maxX - minX))) : 0.5;
+
+    return { d: smoothPath(points), cx, cy, progress };
   }, [pulse, currentPoint]);
 
   return (
@@ -73,21 +111,33 @@ export function SwellPanel({ pulse, currentPoint, shortLabel, isFollowed, onTogg
           (`M2 68 Q 96 2 191 33`) that had nothing to do with the data; it is
           now projected from `pulse.path` with the bright point at the
           interpolated current position, so it cannot disagree with what the
-          scrubber is showing. Same palette as the ocean's own packet cores,
-          so it reads as part of the same world. */}
+          scrubber is showing.
+
+          The gradient is keyed to `progress` — where "now" actually sits
+          along the track — rather than to a fixed offset. That makes the
+          glyph obey the globe's own grammar instead of merely borrowing its
+          colours: brightest exactly at the present, feathering back into the
+          past behind it, dim ahead into forecast the swell has not reached
+          yet. It is the same sentence the ocean is saying, at thumbnail
+          scale, and it now moves as the scrubber moves. */}
       <svg className={styles.arc} viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} fill="none" aria-hidden="true">
         <defs>
           <linearGradient id="arcStroke" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor={SWELL_MID} stopOpacity="0" />
-            <stop offset="55%" stopColor={SWELL_MID} stopOpacity="0.45" />
-            <stop offset="100%" stopColor={SWELL_CORE} stopOpacity="0.95" />
+            <stop offset="0%" stopColor={SWELL_DEEP} stopOpacity="0.05" />
+            <stop offset={`${Math.max(0, glyph.progress - 0.45) * 100}%`} stopColor={SWELL_MID} stopOpacity="0.34" />
+            <stop offset={`${glyph.progress * 100}%`} stopColor={SWELL_CORE} stopOpacity="0.95" />
+            <stop offset={`${Math.min(1, glyph.progress + 0.12) * 100}%`} stopColor={SWELL_MID} stopOpacity="0.46" />
+            <stop offset="100%" stopColor={SWELL_MID} stopOpacity="0.3" />
           </linearGradient>
           <radialGradient id="arcDot">
             <stop offset="0%" stopColor="#ffffff" stopOpacity="0.9" />
             <stop offset="100%" stopColor={SWELL_MID} stopOpacity="0" />
           </radialGradient>
         </defs>
-        <path d={glyph.d} stroke="url(#arcStroke)" strokeWidth="1.1" fill="none" strokeLinejoin="round" />
+        {/* A wide, faint pass under a thin bright one — a glow rather than a
+            drawn line, matching how the ocean renders energy. */}
+        <path d={glyph.d} stroke="url(#arcStroke)" strokeWidth="3.4" strokeOpacity="0.3" fill="none" strokeLinecap="round" />
+        <path d={glyph.d} stroke="url(#arcStroke)" strokeWidth="1.1" fill="none" strokeLinecap="round" />
         <circle cx={glyph.cx} cy={glyph.cy} r="11" fill="url(#arcDot)" />
         <circle cx={glyph.cx} cy={glyph.cy} r="2.4" fill="#ffffff" />
       </svg>

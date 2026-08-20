@@ -3,12 +3,14 @@
 Last updated: 2026-08-20, branch `claude/moana-master-build-plan-v2-zjs07y`.
 Working tree clean, everything below is pushed.
 
-**Round 14 has landed: the swell field is now dispersive packets rather than
-filled disc sectors, the colour signal moved from hue to brightness, and
-Helena's drawn line and marker are gone from the globe entirely. Awaiting
-the user's read on the look — every automated gate passes, but automated
-gates are not the same thing (round 13 is the second time in this project a
-change passed every check and still was not what the user wanted).**
+**Rounds 14 and 15 have landed: the swell field is now dispersive packets
+rather than filled disc sectors, the colour signal moved from hue to
+brightness, Helena's drawn line and marker are gone from the globe entirely,
+the continents have been pushed back behind the water, and the panel glyph
+now tracks the scrubber. Awaiting the user's read on the look — every
+automated gate passes, but automated gates are not the same thing (round 13
+is the second time in this project a change passed every check and still was
+not what the user wanted).**
 
 This file is a complete handoff record: what was done, how, what worked,
 why, and what's next — written so a new agent (or the user, cold) can pick
@@ -49,9 +51,9 @@ the plan's own falsifiable test — five non-surfers timed on a physical phone �
 which no agent session can run itself, and which has not run yet.**
 
 **If you're picking this up cold, read in this order:** (1) this "Status"
-section, (2) "Round 14" under "Phase 0" — the current state, the mechanisms,
-and the five bugs the new self-checking harness caught, (3) "The metrics
-harness" for how to re-run the gates, (4) "Round 13" for the reverted work's
+section, (2) "Round 15" and "Round 14" under "Phase 0" — the current state, the
+mechanisms, and the seven bugs the self-checking harness caught, (3) "The
+metrics harness" (in the round-14 entry) for how to re-run the gates, (4) "Round 13" for the reverted work's
 own diagnosis (still true, still useful — the ACES-at-extremes finding is load
 bearing in round 14's colour design), (5) "Round 12" for the bidirectional
 timeline and source spawn-in, (6) "Round 10" for lateral inhibition and
@@ -1175,6 +1177,68 @@ and "3 Days" show clear, monotonic growth of every source's front across
 the full range, the new stop's label legible with no collision, and a
 mostly-calm ocean at "-18h" where only the earliest-spawning invented
 sources have anything to show yet.
+
+### Round 15: land subordination and the glyph, both measured
+
+Two follow-ups the user approved after seeing round 14, plus a correction to
+something round 14 asserted without checking.
+
+**"The continents read heavy" was not a darkness problem.** Round 14's
+handover said land read too heavy against the reference and guessed it was
+too dark. Measured at interior points, land came out at mean luminance
+**39.6 against an ocean median of 37** — land and water were sitting at
+essentially the *same* brightness. Nothing was pushing land back, so a large
+contiguous mass of static speckled terrain competed on equal terms with the
+moving water around it and read as a hole punched through the field. The fix
+was subordination, not darkening for its own sake: a base below the water's
+mid-tone (`#16293f` -> `#0c1727`), a steeper and weaker terrain lift
+(`pow(nightLum, 1.8) * 0.62` -> `pow(nightLum, 2.3) * 0.30`) so the speckle
+stops rivalling the ocean's filaments texturally, and the coast contour
+raised (0.20 -> 0.26) to keep land legible *as* land once the fill recedes.
+Land now measures 0.70x the ocean median. **M10** holds it in 0.35..0.90 —
+both bounds matter, since round 7 already overshot into black voids from the
+other direction.
+
+**The glyph now obeys the globe's grammar rather than borrowing its
+colours.** Round 14 made it data-driven but it was a near-straight kinked
+polyline with a fixed gradient. Three changes: Catmull-Rom through every
+waypoint emitted as cubic beziers (passes through each point exactly — the
+track is not smoothed *away*, only drawn without corners); a wide faint pass
+under a thin bright one, so it glows rather than being drawn; and the
+gradient keyed to **where "now" actually sits along the track** instead of a
+fixed 55%. That last one is the substantive one — the glyph is now brightest
+exactly at the present, feathers back into the past behind it, and dims ahead
+into forecast the swell has not reached. Same sentence the ocean is saying,
+at thumbnail scale, and it moves as the scrubber moves.
+
+Progress is measured along the **gradient's own axis** (x), not by arc length
+or waypoint index. A `linearGradient` with `x1=0,x2=1` interpolates across the
+element's horizontal extent, so stop offsets are fractions of x; measuring any
+other way lands the highlight near the dot rather than on it, which at this
+scale is the difference between the highlight meaning "here" and meaning
+nothing.
+
+**Two harness bugs this surfaced, both in the measurement rather than the
+code:**
+
+1. **M7 returned NaN** the moment the glyph was smoothed — its inverter
+   parsed only `M`/`L` segments, and a cubic bezier's first four numbers are
+   off-curve control points. Now it takes the last coordinate pair of each
+   segment, which is the on-curve waypoint.
+2. **M10's first baseline was wrong.** It compared land against seven sampled
+   sea points, all of which happened to land in calm gaps between swell bands
+   — 18.8 mean, against 39 for water generally. Measuring land against the
+   *darkest* water on the globe is a much harsher requirement than "land
+   should recede behind the water", and it would swing with scrub position
+   besides. The comparator is now the ocean median over ~590k pixels.
+
+**Verified:** build and lint clean; Stage A 5/5, Stage B parity 0.000368,
+Stage C 9/9, all three Playwright suites pass in both viewports with zero
+console errors. M2 improved from its round-14 knife-edge 2.51 to **2.58** —
+recessing the land raised the ocean median's contrast against the bands
+rather than harming it.
+
+---
 
 ### Round 14: dispersive packets, brightness-first colour, and no drawn line
 

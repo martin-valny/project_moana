@@ -259,6 +259,43 @@ export async function runPixelMetrics() {
   check('M5b', 'scrub visibly redraws the field', changedFrac >= 0.02,
     `${(changedFrac * 100).toFixed(2)}% of pixels changed by more than 6 luminance between Now and Tomorrow; threshold 2%`);
 
+  // --- M10: land stays subordinate to water ------------------------------
+  // Added after "the continents read heavy" turned out, on measurement, not
+  // to be a darkness problem at all: sampled at interior points land came
+  // out at mean luminance 39.6 against an ocean median of 37 — the two were
+  // at essentially the SAME brightness, so nothing pushed land back and a
+  // large static speckled mass competed with the moving water on equal
+  // terms. §5.1 wants land as orientation only.
+  //
+  // Both bounds matter. Too high and land competes; too low and the
+  // continents become the black voids round 7 overshot into, which
+  // dominated the frame just as badly from the other direction.
+  // The comparator is the ocean MEDIAN (P50, already computed above over
+  // ~590k pixels), not a handful of sampled sea points. The first version
+  // sampled seven mid-Atlantic points and they all landed in calm gaps
+  // between swell bands — 18.8 mean, against a 39 median for water
+  // generally. Measuring land against the darkest water on the globe asks
+  // land to be darker than the darkest thing in frame, which is a different
+  // and much harsher requirement than "land should recede behind the
+  // water", and it would swing with the scrub position besides. A median
+  // over the whole disc does not.
+  const LAND_POINTS = [[-10, -55], [-5, -60], [-15, -50], [40, -95], [45, -100], [8, -72], [-20, -45]];
+
+  const landSamples = [];
+  for (const [lat, lon] of LAND_POINTS) {
+    const phi = (90 - lat) * (Math.PI / 180);
+    const th = (lon + 180) * (Math.PI / 180);
+    const v = [-Math.sin(phi) * Math.cos(th), Math.cos(phi), Math.sin(phi) * Math.sin(th)];
+    const s = await page.evaluate((u) => window.__moanaProject(u), v);
+    if (!s.facing) continue;
+    const px = img.at(s.x, s.y);
+    if (px) landSamples.push(lum(...px));
+  }
+  const landMean = landSamples.length ? landSamples.reduce((a, b) => a + b, 0) / landSamples.length : 0;
+  const landRatio = landMean / Math.max(p50, 1e-6);
+  check('M10', 'land stays subordinate to water', landRatio >= 0.35 && landRatio <= 0.9,
+    `land / ocean-median luminance: ${landRatio.toFixed(3)} (land ${landMean.toFixed(1)} over ${landSamples.length} interior points, ocean P50 ${p50.toFixed(0)}); range 0.35-0.90`);
+
   // --- M7: the panel's path glyph agrees with the data -------------------
   // Now that the globe draws no line, the glyph is the only place a route
   // appears at all. Inverting its projection and comparing back to the
@@ -291,10 +328,18 @@ export async function runPixelMetrics() {
   } else {
     // Invert projectPath(): the glyph is an equirectangular fit to the
     // path's own lon/lat bounding box, padded by PAD on each side.
+    // The glyph is Catmull-Rom emitted as cubic beziers, so each segment is
+    // "C c1x c1y c2x c2y ex ey" and only the last pair is an on-curve point
+    // (a waypoint). The control points are off-curve and would skew the
+    // extent this inversion depends on. An earlier version of this parser
+    // handled only M/L and returned NaN the moment the glyph was smoothed.
     const pts = glyph.d
-      .split(/(?=[ML])/)
-      .map((seg) => seg.slice(1).trim().split(/\s+/).map(Number))
-      .filter((p) => p.length === 2 && p.every(Number.isFinite));
+      .split(/(?=[MLC])/)
+      .map((seg) => {
+        const nums = seg.slice(1).trim().split(/[\s,]+/).map(Number).filter(Number.isFinite);
+        return nums.length >= 2 ? [nums[nums.length - 2], nums[nums.length - 1]] : null;
+      })
+      .filter(Boolean);
     const xs = pts.map((p) => p[0]);
     const ys = pts.map((p) => p[1]);
     // The glyph's drawn extent corresponds exactly to the path's lon/lat
