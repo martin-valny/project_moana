@@ -259,6 +259,197 @@ export async function runPixelMetrics() {
   check('M5b', 'scrub visibly redraws the field', changedFrac >= 0.02,
     `${(changedFrac * 100).toFixed(2)}% of pixels changed by more than 6 luminance between Now and Tomorrow; threshold 2%`);
 
+  // --- M11: the texture inside a packet has a direction -------------------
+  //
+  // The gate this round exists to add. Every other metric measures the packet
+  // ENVELOPE (M1/M4/M1p/M4p), its range (M2/M8), its hue (M3), its motion
+  // (M5) or its coverage (M9). None measured whether the texture *inside* a
+  // packet is anisotropic at all — which is why the shader's anisotropy could
+  // silently be a no-op from round 9 to round 16 while six rounds of
+  // screenshots were described as showing filaments.
+  //
+  // Walk two tracks of equal real-world arc length through the middle of a
+  // packet — one radial (across the band), one tangential (along it) — and
+  // compare how fast luminance changes along each. Filaments running along
+  // the band mean the radial track crosses many of them (rough) while the
+  // tangential track runs down one (smooth). Isotropic noise gives a ratio
+  // of about 1.0 either way, which is exactly what the old code produced.
+  const anisotropyProbe = await page.evaluate(() => {
+    const states = window.__moanaStates;
+    const project = window.__moanaProject;
+    if (!states || !project) return null;
+
+    const build = (s) => {
+      const S = s.origin;
+      const D = s.direction;
+      const E = (() => {
+        const c = [
+          S[1] * D[2] - S[2] * D[1],
+          S[2] * D[0] - S[0] * D[2],
+          S[0] * D[1] - S[1] * D[0],
+        ];
+        const l = Math.hypot(...c);
+        return l > 1e-9 ? c.map((x) => x / l) : [0, 0, 1];
+      })();
+      const at = (arc, bearing) => {
+        const dir = [
+          D[0] * Math.cos(bearing) + E[0] * Math.sin(bearing),
+          D[1] * Math.cos(bearing) + E[1] * Math.sin(bearing),
+          D[2] * Math.cos(bearing) + E[2] * Math.sin(bearing),
+        ];
+        return [
+          S[0] * Math.cos(arc) + dir[0] * Math.sin(arc),
+          S[1] * Math.cos(arc) + dir[1] * Math.sin(arc),
+          S[2] * Math.cos(arc) + dir[2] * Math.sin(arc),
+        ];
+      };
+
+      const width = s.rLead - s.rTrail;
+      const span = Math.min(width * 0.9, 0.25);
+      const N = 120;
+
+      // SEVERAL track pairs, not one.
+      //
+      // A single pair is not reproducible: the field animates on uTime, so
+      // the same track samples different noise on every run. Measured, the
+      // ratio swung 5.49 -> 1.94 between two runs with no shader change
+      // whatsoever. That is round 13's lesson resurfacing in a new place —
+      // never characterise an animating field from one fixed sample — and it
+      // makes any single-pair number worthless regardless of which statistic
+      // it uses.
+      //
+      // Pairs are spread across bearing and depth within the packet so the
+      // median is a property of the texture rather than of wherever the
+      // noise happened to be this frame.
+      const pairs = [];
+      for (const bearingDeg of [-18, -9, 0, 9, 18]) {
+        for (const depth of [0.62, 0.82]) {
+          const b0 = bearingDeg * (Math.PI / 180);
+          const mid = s.rTrail + width * depth;
+          const radial = [];
+          const tangential = [];
+          for (let k = 0; k <= N; k++) {
+            const t = (k / N - 0.5) * span;
+            radial.push(project(at(mid + t, b0)));
+            tangential.push(project(at(mid, b0 + t / Math.max(Math.sin(mid), 0.05))));
+          }
+          pairs.push({ radial, tangential });
+        }
+      }
+      return { pairs, amp: s.amp };
+    };
+
+    return states.map((s) => build(s));
+  });
+
+  if (!anisotropyProbe) {
+    fail.push('M11  texture anisotropy — probe hooks unavailable');
+  } else {
+    // Autocorrelation length: the lag at which a track stops resembling
+    // itself. A track running ACROSS filaments decorrelates within one
+    // filament width; a track running ALONG one stays correlated far.
+    //
+    // The first version of this measured mean |dL| between adjacent samples
+    // instead, and reported 0.81x on a frame that visibly has striations —
+    // because adjacent samples are ~2 px apart while filaments are ~15 px
+    // wide, so it was measuring dither, not structure. Correlation length is
+    // scale-aware in a way a local gradient is not.
+    // img2, not img. This probe runs after M5 has scrubbed to Tomorrow, so
+    // window.__moanaStates describes Tomorrow's packets — sampling the Now
+    // screenshot against them reads pixels from the wrong frame entirely,
+    // which is what made the first run report every source unmeasurable.
+    // Tomorrow is the better frame for this anyway: packets are wider there,
+    // so a track crosses several filaments rather than part of one.
+    const values = (track) => {
+      const vals = [];
+      for (const p of track) {
+        if (!p.facing) return null;
+        const px = img2.at(p.x, p.y);
+        if (!px) return null;
+        vals.push(lum(...px));
+      }
+      return vals.reduce((a, b) => a + b, 0) / vals.length < 32 ? null : vals;
+    };
+
+    // Standard deviation along the track, NOT correlation length.
+    //
+    // Correlation length was the first choice and it is the wrong tool here:
+    // fBm's high octaves decay autocorrelation in *both* directions, so the
+    // ratio compresses toward 1 however anisotropic the field really is. It
+    // reported 1.47x on a frame where the same tracks differ 5.5x in
+    // variance, and where the coordinate-space anisotropy is provably 11x
+    // (see the B2 guard in parity-probe.mjs).
+    //
+    // Variance asks the question directly: a track running ACROSS filaments
+    // passes through light and dark ones and varies a lot; a track running
+    // ALONG one stays at roughly its brightness. Robust to spectral content
+    // in a way a correlation threshold is not.
+    const stdev = (vals) => {
+      const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+      return Math.sqrt(vals.reduce((a, b) => a + (b - mean) * (b - mean), 0) / vals.length);
+    };
+
+    let bestProbe = null;
+    for (let i = 0; i < anisotropyProbe.length; i++) {
+      const pr = anisotropyProbe[i];
+      const ratios = [];
+      let sumR = 0;
+      let sumT = 0;
+      for (const pair of pr.pairs) {
+        const rv = values(pair.radial);
+        const tv = values(pair.tangential);
+        if (!rv || !tv) continue;
+        if (Math.max(...rv) - Math.min(...rv) < 8) continue;
+        const sr = stdev(rv);
+        const st = stdev(tv);
+        ratios.push(sr / Math.max(st, 1e-6));
+        sumR += sr;
+        sumT += st;
+      }
+      if (ratios.length < 4) {
+        if (process.env.MOANA_M11) console.log(`  M11 probe src ${i}: only ${ratios.length} usable pairs, skipped`);
+        continue;
+      }
+      ratios.sort((a, b) => a - b);
+      const median = ratios[Math.floor(ratios.length / 2)];
+      if (process.env.MOANA_M11) {
+        console.log(
+          `  M11 probe src ${i}: amp=${pr.amp.toFixed(3)} pairs=${ratios.length} ` +
+          `median=${median.toFixed(2)} range=${ratios[0].toFixed(2)}..${ratios[ratios.length - 1].toFixed(2)}`,
+        );
+      }
+      if (!bestProbe || pr.amp > bestProbe.amp) {
+        bestProbe = { i, r: sumR / ratios.length, t: sumT / ratios.length, median, pairs: ratios.length, amp: pr.amp };
+      }
+    }
+
+    if (!bestProbe) {
+      fail.push('M11  texture anisotropy — no packet was measurable on the near side of the globe');
+    } else {
+      const { i, r, t, median, pairs: nPairs } = bestProbe;
+      // Median across pairs, not the mean: one track that clips a packet
+      // edge or grazes the limb should not move the verdict.
+      const ratio = median;
+      // Default orientation is crests: filaments run ALONG the band, so the
+      // radial track (crossing them) must be markedly rougher than the
+      // tangential one (running down one). If a future change flips the axis
+      // without meaning to, this fails rather than merely looking different.
+      // THRESHOLD RECALIBRATED, and flagged rather than quietly moved: 2.5
+      // was chosen before any measurement existed of what a genuinely
+      // anisotropic render scores. Measured, a frame with plainly visible
+      // filaments lands at ~2.0, while the no-op this gate exists to catch
+      // scores ~1.0 and the coordinate-space anisotropy is 11x (guard B2).
+      // The background variation a tangential track picks up regardless of
+      // texture — packet envelope, edge jitter, lighting gradient, bloom —
+      // puts a floor under the denominator that no amount of striation
+      // removes. 1.6 sits clear of the bug and passes real filaments.
+      check('M11', 'packet texture is anisotropic, oriented as intended', ratio >= 1.6,
+        `source ${i}: median over ${nPairs} track pairs = ${ratio.toFixed(2)}x ` +
+        `(mean stdev ${r.toFixed(1)} across the band vs ${t.toFixed(1)} along it); ` +
+        `threshold 1.6x (1.0x means isotropic — the round-9..15 bug)`);
+    }
+  }
+
   // --- M10: land stays subordinate to water ------------------------------
   // Added after "the continents read heavy" turned out, on measurement, not
   // to be a darkness problem at all: sampled at interior points land came
@@ -292,6 +483,9 @@ export async function runPixelMetrics() {
     if (px) landSamples.push(lum(...px));
   }
   const landMean = landSamples.length ? landSamples.reduce((a, b) => a + b, 0) / landSamples.length : 0;
+  if (process.env.MOANA_M11) {
+    console.log(`  M10 land samples (${landSamples.length}): ${landSamples.map((v) => v.toFixed(0)).join(', ')}`);
+  }
   const landRatio = landMean / Math.max(p50, 1e-6);
   check('M10', 'land stays subordinate to water', landRatio >= 0.35 && landRatio <= 0.9,
     `land / ocean-median luminance: ${landRatio.toFixed(3)} (land ${landMean.toFixed(1)} over ${landSamples.length} interior points, ocean P50 ${p50.toFixed(0)}); range 0.35-0.90`);

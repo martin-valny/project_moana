@@ -66,6 +66,8 @@ const SURFACE_FRAGMENT = /* glsl */ `
   uniform float uScrubHours;
   /** Index of the selected source, or -1. Drives the focus pull. */
   uniform int uSelected;
+  /** 0 = filaments run along the band (wave crests), 1 = along travel. */
+  uniform float uFilamentAxis;
 
   uniform vec3 uLandColor;
   uniform vec3 uCoastColor;
@@ -193,6 +195,12 @@ const SURFACE_FRAGMENT = /* glsl */ `
       float bestWeight = 0.0;
       float domPeriod = uSourcePeriod[0];
       float domSelected = 0.0;
+      // The dominant source's polar frame at this fragment — the space the
+      // anisotropic noise is sampled in. Following the dominant source
+      // rather than blending frames matters: averaging two sources' polar
+      // coordinates would describe a storm that is not there.
+      vec2 domFrame = vec2(0.0);
+      float domWidth = 0.12;
 
       // Breaks the analytic arc. The packet envelope is exact geometry, so
       // rendered straight it draws a mathematically perfect band — which is
@@ -242,6 +250,8 @@ const SURFACE_FRAGMENT = /* glsl */ `
           bestWeight = w;
           domPeriod = uSourcePeriod[i];
           domSelected = (i == uSelected) ? 1.0 : 0.0;
+          domFrame = moanaSourceFrame(S, D, vPos, d);
+          domWidth = bandWidth;
         }
 
         // Round 10: sharp dividing lines where two sources' fans overlap at
@@ -306,73 +316,114 @@ const SURFACE_FRAGMENT = /* glsl */ `
       float periodMix = smoothstep(uPeriodHueMin, uPeriodHueMax, domPeriod);
 
       // --- Anisotropic noise domain -----------------------------------
-      // The single most important line in this shader. Splitting the sample
-      // position into components along and across the flow direction and
-      // scaling them unequally makes features longer along the flow than
-      // across it. Sampling isotropically (as early rounds did) can only
-      // ever produce curly, equal-sided blobs — no colour-ramp or threshold
-      // tuning turns those into streaks.
       //
-      // Round 9: ratio brought down from ~10:1 to 5:1 at full confidence.
-      // Direction now genuinely varies across the globe instead of being one
-      // constant everywhere, so less stretch is needed to read as flow —
-      // 10:1 was a large part of what earlier rounds' feedback called
-      // "smeared".
+      // ROUND 16 — this is the fix for "I still don't see the filament
+      // ribbon structures". It is worth reading why, because the previous
+      // version of this block was a no-op that survived six rounds.
       //
-      // dirConfidence, and blending the ratio itself toward isotropic as it
-      // drops, exists to fix a real artifact the first version of this
-      // shipped with: "direction away from a point on a sphere" is a vector
-      // field with a singularity exactly at that point (the same reason you
-      // can't comb a hairy ball flat at the poles) — direction rotates
-      // arbitrarily fast in the small neighbourhood around every source's
-      // own origin. Stretched 5:1 through the noise sample, that showed up
-      // as a sharp-edged diamond artifact right at Helena's origin. flowMag
-      // (the un-normalised sum, before it collapses to a unit vector) is
-      // small both there AND in genuinely calm water far from any source —
-      // exactly the two places a confident direction shouldn't be trusted —
-      // so it doubles as the fade signal for free.
-      // poleConfidence multiplies in here too: near a source's own origin,
-      // away is now locked to the stable D (see above), so flowMag alone
-      // reads as high confidence even though the direction is only stable
-      // because it's pinned, not because the field has actually organised
-      // — exactly the zone the spiral artifact came from.
-      float dirConfidence = clamp(flowMag * 6.0, 0.0, 1.0) * poleConfidence;
-      vec3 along = dot(vPos, f) * f;
-      vec3 across = vPos - along;
-      // Round 14: the along-flow scale is now period-dependent rather than a
-      // flat 0.35 for every source — roughly 3.9:1 for a 13 s wind-swell up
-      // to 8:1 for a 17 s groundswell. Same mechanism as before, just no
-      // longer pretending every swell has the same texture.
-      float alongScale = mix(0.45, 0.22, periodMix);
-      vec3 coord = along * mix(1.0, alongScale, dirConfidence) + across * mix(1.0, 1.75, dirConfidence);
+      // It used to decompose the sample position along the flow tangent:
+      //
+      //     vec3 along  = dot(vPos, f) * f;
+      //     vec3 across = vPos - along;
+      //
+      // But f comes from moanaFlow() and is a TANGENT at vPos, and a tangent
+      // on a unit sphere is perpendicular to the position vector by
+      // construction. So dot(vPos, f) was identically zero — measured at
+      // 1.7e-16 — making 'along' the zero vector, 'across' exactly vPos, and
+      // the whole expression a uniform scale of vPos. Isotropic. The comment
+      // that used to sit here called this "the single most important line in
+      // this shader" and warned that isotropic sampling "can only ever
+      // produce curly, equal-sided blobs". Both true; the line beneath it had
+      // been doing precisely that since round 9, when f changed from one
+      // global direction (not tangent, so the decomposition worked) to this
+      // per-fragment tangent (always tangent, so it could not).
+      //
+      // It is not repairable in place. vPos is the surface normal, so ANY
+      // matrix built from tangent axes leaves it untouched:
+      // outerProduct(t,t) * vPos = t * dot(t, vPos) = 0 for every tangent t.
+      // The sampling space itself has to change.
+      //
+      // So: sample in the dominant source's own polar frame, which a radially
+      // propagating wave field supplies for free — distance out from the
+      // storm, and arc length around it (moanaSourceFrame in swellField.ts).
+      // Anisotropy is then just scaling those two axes unequally, which is
+      // well-defined everywhere, and filament ORIENTATION becomes a single
+      // swap between them.
+      //
+      // dirConfidence no longer comes from flowMag. flowMag is the length of
+      // a sum of away * pow(w, 3.0) — round 10's lateral inhibition, which
+      // exists to sharpen which source wins the DIRECTION. Reusing that
+      // cubed magnitude as a confidence collapsed it: at w = 0.3 inside a
+      // packet body it lands at 0.027 * 6 = 0.16, so anisotropy would have
+      // applied only at the very brightest peaks and faded out through the
+      // body even after the projection was fixed. bestWeight — the dominant
+      // source's un-cubed weight, already tracked above — is what "do we know
+      // which way this is going" actually means.
+      // Where two sources are near-equally strong, domFrame flips between two
+      // entirely different polar coordinate systems from one fragment to the
+      // next, and the noise jumps with it — that is the hard polygonal
+      // faceting the first render of this round showed. Unlike a direction
+      // vector, two sources' polar frames cannot be blended into a meaningful
+      // third, so the answer is to stop claiming a direction at all where no
+      // single source owns the fragment: fade to isotropic across the tie.
+      // Round 10 solved the same class of seam for flow direction with
+      // lateral inhibition; this is its equivalent for the sampling frame.
+      float dominance = energyAccum > 1e-5 ? bestWeight / energyAccum : 1.0;
+      float clearlyDominant = smoothstep(0.55, 0.85, dominance);
+      float dirConfidence = clamp(bestWeight * 3.2, 0.0, 1.0) * poleConfidence * clearlyDominant;
 
-      // Travel along the flow, plus a slow independent evolution so the
-      // field never reads as a rigid texture sliding past.
+      // Frequencies are ~10-20x higher than the old ones, and that is the
+      // other half of why nothing read as filaments. At the previous
+      // coord * 0.95 on a unit sphere, noise features were about 1 radian —
+      // 57 degrees — while packets are 7-27 degrees wide. Less than one
+      // feature spanned an entire band, which is exactly the broad lumpiness
+      // that was on screen. ~9 per radian puts roughly five striations across
+      // a 20-degree band, with the fBm octaves supplying detail above that.
       //
-      // Both terms below multiply f by dirConfidence — without this, even
-      // once the stretch ratio above correctly fades to isotropic near a
-      // source's own origin, these two still fed raw (unfaded) f straight
-      // into the domain warp's offset. Domain warping is *designed* to
-      // amplify small input changes, so f's residual rotation there alone
-      // was enough to redraw the spiral the stretch fade was supposed to
-      // remove — found by testing a rotated camera angle that brought a
-      // source's own origin (not just an inter-source seam) into frame.
-      // Round 14: uScrubHours joins uTime here, and it is the single biggest
-      // "smooth over time" change in this round. Before, uTime drove the
-      // filaments and offsetHours drove the packet edges — two independent
-      // clocks, so scrubbing moved the envelope while the texture underneath
-      // sat still. The ocean re-drew instead of responding. Advecting the
-      // noise phase with the scrub too means dragging the timeline
-      // physically pulls the water along the flow.
+      // uFilamentAxis swaps which axis is fine and which is long:
+      //   0 = crests      — filaments run ALONG the band (perpendicular to
+      //                     travel), the way real wave crests do
+      //   1 = streamlines — filaments run along the direction of travel
+      // Filament COUNT across a band is what should be constant, not
+      // filament wavelength — so the fine-axis frequency scales with the
+      // band's own width rather than being a fixed number.
       //
-      // 0.004 rad/hour is deliberately well under the ~0.0141 rad/hour a
-      // 16 s group velocity implies, and that is the honest number rather
-      // than a compromise: wave *energy* travels at Cg, the water surface
-      // itself does not. Filaments streaming at a fraction of the front's
-      // speed is what real swell looks like — and it keeps a fast scrub from
-      // reading as the texture racing.
-      coord += f * (uTime * 0.025 + uScrubHours * 0.004) * dirConfidence;
-      vec3 evolve = f * 0.15 * dirConfidence + vec3(uTime * 0.009);
+      // A fixed constant cannot serve both ends of the scrubber. Packets run
+      // 0.12 rad wide when young and 0.35+ when mature, so any single value
+      // is either too coarse to fit a filament inside a young band (6.5 gave
+      // a 0.154 rad wavelength against a 0.12 rad band — under one filament
+      // across it, and M11 read 2.25x) or too fine for a mature one (14
+      // turned the +3 Days frame into contour-line spaghetti). Both were
+      // observed directly; this is the fix for the tension rather than a
+      // compromise between the two.
+      const float FILAMENTS_PER_BAND = 3.2;
+      const float K_LONG = 0.7;
+      float kFine = FILAMENTS_PER_BAND / max(domWidth, 0.04);
+      float kRadial = uFilamentAxis < 0.5 ? kFine : K_LONG;
+      float kTangential = uFilamentAxis < 0.5 ? K_LONG : kFine;
+
+      // Long-period groundswell runs as longer, cleaner, more parallel
+      // filaments than short-period wind swell. Same idea round 14 intended,
+      // now applied somewhere it can actually take effect.
+      float lengthen = mix(1.25, 0.72, periodMix);
+
+      vec2 frame = domFrame;
+      // Advection: the packet's texture streams outward with the swell, and
+      // the scrub drags it (round 14's mechanism 4, unchanged in intent).
+      // 0.004 rad/hour is deliberately well under the ~0.0141 a 16 s group
+      // velocity implies — wave *energy* travels at Cg, the water surface
+      // does not — and it keeps a fast scrub from reading as racing texture.
+      frame.x -= uTime * 0.025 + uScrubHours * 0.004;
+
+      // Blend toward an isotropic sample where direction is not trustworthy
+      // (calm water, and the neighbourhood of a source's own origin), rather
+      // than stretching noise along an axis that is essentially noise itself.
+      vec2 aniso = vec2(frame.x * kRadial * lengthen, frame.y * kTangential);
+      vec2 iso = frame * 2.2;
+      vec2 sampled = mix(iso, aniso, dirConfidence);
+
+      vec3 coord = vec3(sampled, uTime * 0.012);
+      vec3 evolve = vec3(uTime * 0.009);
 
       // Moderate warp: enough for gentle S-curves and feathering, not so
       // much that it curls the streaks back into noodles. Round 7: octave
@@ -380,8 +431,18 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // 5 on high tier) — previously high-tier hardware paid for 5 octaves
       // in qualityTier.ts but this cap meant only 3 were ever used. Finer
       // filament detail is exactly what the reference shows more of.
-      float n = warpedFbm(coord * 0.95, uOctaves, 0.45, evolve);
-      n += fbm(coord * 3.0, uOctaves) * 0.06; // wispy edge detail
+      //
+      // Warp strength is lower than round 14's 0.45 but nowhere near as low
+      // as this round briefly took it. Domain warping displaces the sample
+      // point by fBm of itself, and that displacement is isotropic, so in
+      // principle it works against an anisotropic field — which is why it
+      // was cut to 0.06 mid-round. That reasoning rested on a correlation-
+      // length measurement later shown to be measuring fBm's spectrum rather
+      // than the field's anisotropy (see M11's own comment), and at 0.06 the
+      // filaments came out as hard, evenly-spaced contour lines: legible,
+      // but drawn rather than grown. The warp is what makes them wander.
+      float n = warpedFbm(coord, uOctaves, 0.26, evolve);
+      n += fbm(coord * 2.6, uOctaves) * 0.10; // wispy edge detail
       n *= 0.75 + fieldEnergy01 * 0.9;                 // local swell energy drives contrast
 
       // Broad soft bands with a small bright core. Two failure modes to
@@ -396,8 +457,18 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // made these read as hard-edged saturated bands with abrupt
       // shoulders. Widening the ramp is what softens an edge; the noise
       // shape itself was never the problem.
-      float band = smoothstep(-0.35, 0.52, n);
-      float crest = smoothstep(0.34, 0.70, n);
+      // TWO ramps, not one. Round 16 narrowed the single ramp from
+      // smoothstep(-0.35, 0.52) so filaments would cross threshold crisply
+      // instead of smearing into gradients — which worked, and also turned
+      // the entire calm ocean into high-contrast contour lines, because the
+      // same ramp feeds the ambient water texture. Splitting them keeps the
+      // striations where they mean something:
+      //   ambient — wide and soft, the faint structure open water has always
+      //             had, unchanged from round 14.
+      //   band    — narrow and crisp, used only where swell energy gates it.
+      float ambient = smoothstep(-0.35, 0.52, n);
+      float band = smoothstep(-0.16, 0.30, n);
+      float crest = smoothstep(0.30, 0.62, n);
       crest = pow(crest, 2.0);
 
       // --- Colour: brightness carries the information, hue carries identity
@@ -431,7 +502,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
 
       // Calm water keeps its own faint structure — the reference shows wispy
       // detail across the whole ocean, not only inside the bright bands.
-      vec3 oceanColor = mix(uOceanDeep, uOceanMid, band * 0.34);
+      vec3 oceanColor = mix(uOceanDeep, uOceanMid, ambient * 0.34);
 
       // Round 13's Bug 1, kept fixed: colour used to enter the ocean *only*
       // scaled by 'band' (how much ribbon noise sits at this exact pixel), so
@@ -589,6 +660,8 @@ interface GlobeSphereProps {
   selectedIndex: number;
   /** Called with the tapped point as a unit vector, for Globe.tsx to resolve to a source. */
   onPick?: (unit: THREE.Vector3) => void;
+  /** 0 = filaments run along the band (wave crests), 1 = along the direction of travel. */
+  filamentAxis?: number;
   octaves?: number;
 }
 
@@ -604,7 +677,7 @@ interface GlobeSphereProps {
  * (short version: one direction for the whole planet is what "the ocean
  * looks smeared" was describing).
  */
-export function GlobeSphere({ radius, pulse, startTime, offsetHours, selectedIndex, onPick, octaves = 5 }: GlobeSphereProps) {
+export function GlobeSphere({ radius, pulse, startTime, offsetHours, selectedIndex, onPick, filamentAxis = 0, octaves = 5 }: GlobeSphereProps) {
   // Round 7: a real (Natural-Earth-derived) land/ocean mask replaces the
   // earlier hand-rolled scanline-fill one — see public/textures/SOURCES.md.
   const landMask = useLoader(THREE.TextureLoader, '/textures/earth-water.png');
@@ -677,6 +750,7 @@ export function GlobeSphere({ radius, pulse, startTime, offsetHours, selectedInd
       uSourcePeriod: { value: periodArray },
       uScrubHours: { value: offsetHours },
       uSelected: { value: selectedIndex },
+      uFilamentAxis: { value: filamentAxis },
       uOctaves: { value: octaves },
       // World-space key light direction — soft upper-left bias, matching
       // the reference's gentle overall brightness gradient. Fixed, not
@@ -747,8 +821,9 @@ export function GlobeSphere({ radius, pulse, startTime, offsetHours, selectedInd
     material.uniforms.uSourcePeriod.value = periodArray;
     material.uniforms.uScrubHours.value = offsetHours;
     material.uniforms.uSelected.value = selectedIndex;
+    material.uniforms.uFilamentAxis.value = filamentAxis;
     material.uniforms.uOctaves.value = octaves;
-  }, [sources, originArray, dirArray, rLeadArray, rTrailArray, ampArray, periodArray, offsetHours, selectedIndex, octaves]);
+  }, [sources, originArray, dirArray, rLeadArray, rTrailArray, ampArray, periodArray, offsetHours, selectedIndex, filamentAxis, octaves]);
 
   // Selection: unproject the tap to a point on the unit sphere and hand it
   // up. Globe.tsx does the argmax against the same resolved states this
