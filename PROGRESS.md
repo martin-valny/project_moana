@@ -165,8 +165,10 @@ lower threshold.
 ### Things the user has decided, so don't re-litigate
 
 - **Isotropic ocean sampling, no filaments.** Decided in round 17 by direct
-  comparison of both renders. The soft field is the chosen look, not a
-  limitation being worked around. `B2` guards it.
+  comparison of both renders, then re-confirmed against two middle-ground
+  variants ("current no filaments is best"). The soft field is the chosen look,
+  not a limitation being worked around. `B2` guards it. Do not reopen this on
+  the theory that a subtler version exists — one was built and it doesn't.
 - **No purple.** Dropped in round 14 with the user's agreement, after measuring
   that it never rendered. M3 now asserts zero red-dominant ocean pixels.
 - **No drawn line or marker on the globe.** Removed in round 14; the path lives
@@ -1401,6 +1403,47 @@ not more analysis but the cheapest possible experiment: build both, render the
 same frame, put them side by side, ask. That took about fifteen minutes against
 six rounds of the question staying open.
 
+
+#### The middle ground was tested, and there isn't one
+
+Before treating the decision as final, the obvious question was asked: round 16
+pushed contrast hard to satisfy a threshold, so would a much weaker version read
+as texture rather than contour lines? Two attempts, both rendered at the same
+frame, viewport and camera as the comparison above.
+
+**Attempt 1 — round 16 with the levers pulled back.** `FILAMENTS_PER_BAND`
+3.2 → 2.2, the band ramp widened from `smoothstep(-0.16, 0.30)` back toward the
+shipped `(-0.35, 0.52)`, the crest highlight given a later onset and steeper
+power so it lights far fewer edges, and per-filament brightness variation added
+(low-frequency across the fine axis, slow along the long one) so striations
+stop rendering at identical intensity. That is round 16's own "what a future
+attempt must do differently" brief, implemented. Result: better than round 16,
+still reads as banding. It sat much closer to the rejected frame than to the
+shipped one.
+
+**Attempt 2 — a different structure, not a knob turn.** The swell's *envelope*
+sampled isotropically (identical to what ships) with the anisotropic sample
+mixed in at `0.20 * dirConfidence`, so the grain modulates brightness *inside* a
+band instead of drawing new ones. That did remove the contours. It also made
+the directional texture essentially invisible, and let round 16's
+dominant-frame-tie faceting through as hard straight seams — at a low mix
+weight there is not enough weight left to fade the tie out.
+
+**The finding, which is why this is closed rather than deferred:** the
+striations come from the same threshold that produces the bands. Push them hard
+enough to see and they cross that threshold and become bands of their own —
+contour lines. Damp them below it and they stop being visible at all. There is
+no setting in between. Round 16's brief assumed the problem was restraint; it is
+structural.
+
+Real filaments would need the texture to live somewhere other than the band
+ramp's input — a rewrite of the ocean's colour chain, not a round of tuning. On
+the evidence, not worth it. Shown all three frames, the user's verdict was
+unchanged: *"current no filaments is best."*
+
+Neither experiment was committed. Both are reproducible from `1856985` plus the
+edits described above.
+
 ### Round 16: the anisotropy no-op — found, fixed, reverted for looking wrong
 
 **Status: built, shown to the user, and reverted at their request ("ok, this is
@@ -1559,6 +1602,13 @@ screen says nothing about whether it should.
   compounds the contour-line reading.
 - **Do not chase M11's number.** Set it low enough to catch the no-op (~1.6) and
   judge the look by eye.
+
+**This list has since been tried, and it does not work** — see "The middle
+ground was tested, and there isn't one" in the round-17 entry above. Implemented
+faithfully (subtler contrast, per-filament brightness variation, warp left
+alone, crest weakened) the result still read as banding. The limitation is
+structural, not a matter of restraint. Treat the list as history, not as a
+brief.
 
 #### Two metric lessons, both hard-won
 
