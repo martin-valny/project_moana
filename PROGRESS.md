@@ -146,18 +146,19 @@ lower threshold.
    No agent session can run it, and Phase 0 is not finishable without it. With
    filaments closed, this is not merely the biggest outstanding item, it is
    very nearly the only one, and it needs the user.
-2. **Phase 1 ingestion has not been started**, and is worth starting in
-   parallel rather than after — it does not depend on the §8 gate. The reason
-   to bring it forward: the round 14/15 visual model contains accommodations to
-   invented data. Packet decay is floored at ~0.35 instead of the physical 0.10
-   so swells stay legible across the scrubber, and Helena's front comes from
-   her own waypoints because her track runs 2.6× slower than her stated period
-   implies. Both are defensible for a prototype, and both are untested against
-   real messiness. Every further round of art direction tuned to a 20-waypoint
-   fiction raises the chance that Phase 2's "swap in real data" becomes "retune
-   the whole visual." A thin spike — one real event, real grid, derived energy
-   as H²×T — answers that now. §8's Phase 1 already asks for exactly this
-   sanity check.
+2. **The pre-Phase-1 ingestion spike is done (see "10." under the Phase −1
+   investigation, and "Thread B" under "What's next").** It answered the
+   question it was scoped to answer: the round 14/15 visual model does not
+   survive contact with real per-cell data unmodified — real energy values
+   (138-1,078 measured) blow past the shader's Helena-calibrated
+   `ENERGY_RANGE` (0..400), clamping half a real track's points to maximum
+   brightness and flattening the leading-edge-as-motion cue, and a real
+   track's centroid can double back in a way Helena's hand-placed path never
+   does. Both are narrow, named, fixable Phase 2 art-direction items, not a
+   sign the packet model is wrong — and both stay gated behind the §8 item
+   above, per the plan's own build order. Real Phase 1 (scheduled ingestion,
+   storage, the full seven-basin grid) has still not been started, correctly
+   — it's real Phase 1 work and was never in scope for this spike.
 3. **Nothing is known-broken.** Land treatment and the panel glyph were the
    user's two round-15 asks and both landed. Filaments are decided, not
    deferred (see the box at the top). Round 17 left the frame untouched.
@@ -2517,15 +2518,102 @@ test, in exchange for duration numbers that are inflating for the wrong
 reason. No code or threshold changes made as a result of this check — it
 confirmed the existing decision rather than changing it.
 
+### 10. The ingestion spike (Thread B): a real track breaks the round-14 brightness-as-motion cue
+
+Done as a follow-up to the sections above, per the handoff this file left for
+a fresh agent (see the old "Thread B" text this section replaces, still
+readable in git history at `8d7a4f7`). The question was concretely scoped:
+*does the round 14/15 packet aesthetic survive contact with real, messy
+per-cell data, or does it need retuning before Phase 2?*
+
+**Step 1 — run the pipeline for real.** `python3 test_event.py raw_clean.json`
+at the validated `period_threshold=11` passes 90h / 3619km (`output_clean/`,
+committed) — the same result number the old Thread B text quoted from
+memory, now actually reproduced rather than assumed.
+
+**Step 2 — the converter.** `phase-1-validation/to_swell_pulse.py` re-runs
+clustering + tracking while also recording each surviving track's per-frame
+period/direction/energy/cell-count (`Track` itself only keeps the latest
+snapshot of those, which loses exactly the per-point detail a `SwellPulse`
+needs), picks the track that passed step 1 (id 35), and emits it in the
+`SwellPulse` shape `types.ts` defines — 16 points, energy-per-cell derived
+as `total_energy / n_cells` (a representative single-component energy, not
+the whole cluster's summed total) and `swell_height` back-derived from that
+via the same H²×T convention `helena.ts` uses. Output committed at
+`output_clean/swell_pulse_track35.json`.
+
+**Step 3 — swap it in.** Built as a second pulse-driven `SwellSource`
+alongside Helena in `swellSources.ts` (in place of the invented `boreas`
+entry, keeping the source count at `MAX_SWELL_SOURCES`), reusing
+`resolveSwellSources`'s existing pulse-driven path unchanged, and rendered
+the "3 Days" frame both with and without the swap (`npm run build` +
+`npm run preview` + a one-off Playwright screenshot, then a `pngjs` pixel
+diff against the same frame with `boreas` still in). Verified: `npm run
+build` and `npm run lint` both clean with the swap in place.
+
+**Step 4 — judge. It does not survive contact with real data**, and the
+reason is measurable rather than a matter of taste:
+
+- **Energy saturates the shader's calibration.** `interpolate.ts`'s
+  `normalizeEnergy` clamps to 1.0 above `ENERGY_RANGE.max = 400` — a range
+  calibrated against Helena's own invented 22-353 span. This track's
+  per-point energy-per-cell measures **138 to 1,078**, and **8 of its 16
+  points (50%) already exceed 400** on their own. Round 14's whole
+  legibility mechanism is the leading edge reading as the brightest,
+  most-recently-arrived part of the packet (see "Round 14" above) — with
+  half the real track's points pinned at maximum brightness regardless of
+  where the front actually is, that cue goes flat for a large fraction of
+  its 90h run. This is `phase-1-validation/README.md`'s "adjust the
+  art-direction layer, not the underlying data" case exactly: the fix
+  belongs in `ENERGY_RANGE`, not in the tracker.
+- **The track itself is non-monotonic in a way Helena's hand-placed path
+  never is.** The region-grown cluster this track follows grows from 24
+  cells to 195 and back to 165, and its energy-weighted mean direction
+  swings 234.7°→317.1° and partway back over the 90h run — the same
+  "centroid drift from a reshaping blob, not bulk translation" failure mode
+  `tracking.py`'s own `_predict_position` docstring already names as
+  observed on this exact dataset. `packetFromFront` measures a front's
+  distance as the angular distance from the source's fixed origin to its
+  *current* interpolated position, which assumes that distance grows
+  monotonically; a track whose centroid genuinely doubles back can make a
+  packet's rendered front radius shrink and regrow rather than simply
+  advance — a failure mode Helena's smooth, monotonic hand-placed path
+  structurally cannot exercise, so nothing in rounds 1-17 tested it.
+- Screenshots taken (`/tmp`, not committed — this is a spike, not a
+  deliverable per §5 of the original plan text) support this: the swapped
+  packet renders as a tighter, higher-contrast band shape than the invented
+  `boreas` packet it replaced, consistent with the saturation finding
+  above, though the sandbox's continuous shader animation (`uTime` keeps
+  running under `reducedMotion`, which only stops camera autorotate) makes
+  a clean pixel-for-pixel diff between two separate page loads noisy
+  outside the region actually occupied by the swapped source.
+
+**Verdict: not promoted.** Per this file's own instruction to itself
+("keep it out of the production data path unless the result is good enough
+to actually replace a decorative source outright"), the `swellSources.ts`
+swap was reverted after judging it — `boreas` is back, `git diff` against
+before this round is empty for that file. What's kept: `to_swell_pulse.py`
+(the converter, real and re-runnable) and `output_clean/
+swell_pulse_track35.json` (its output, as evidence). Nothing from this round
+touched `phase-0-prototype/src/data/` in the final state.
+
+**What this actually answers:** the round 14/15 aesthetic does not survive
+contact with real data unmodified — but the specific way it fails is
+narrow and fixable (recalibrate `ENERGY_RANGE` against real data's own
+range, and treat `packetFromFront`'s monotonic-distance assumption as
+something a real, potentially non-monotonic track can violate), not a sign
+the packet model itself is wrong. That recalibration is real Phase 2 work
+(per §8: adjust art-direction, not the underlying tracker), not a second
+spike.
+
 ---
 
 ## What's next
 
 **Two independent threads, and they can run in parallel — neither blocks the
 other.** Thread A is the §8 human gate, unchanged from before and still
-needing the user. Thread B is a new, concretely-scoped ingestion spike, laid
-out in full below because it's the piece a fresh agent session should pick up
-next.
+needing the user. Thread B — the ingestion spike — is now done (see "10." above);
+what's left under it is a narrower, concretely-scoped follow-up.
 
 ### Thread A — the §8 gate (unchanged, still needs the user)
 
@@ -2537,97 +2625,38 @@ the filament question — see the box at the top of this file — so there may b
 nothing left to iterate on). If it fails, §8 says iterate on shaders/motion/
 typography, not add data complexity to compensate.
 
-### Thread B — the pre-Phase-1 ingestion spike (this is the part to hand a fresh agent)
+### Thread B — done: the ingestion spike answered its question
 
-**This is deliberately not Phase 1 itself.** §8's real Phase 1 — a scheduled
-job, object storage, the full global grid, all seven basins — stays gated
-behind Thread A passing, per the plan's own build order. What follows is
-smaller and does not wait: a spike to answer one question before more rounds
-go into the visual model — *does the round 14/15 packet aesthetic survive
-contact with real, messy per-cell data, or does swapping in real data mean
-retuning the whole visual at Phase 2?* Packet decay is floored at ~0.35
-instead of the physical 0.10 specifically to stay legible against *invented*
-data; nobody has checked whether that floor, or the packet shape generally,
-still reads once the input is a real noisy 400-cell grid instead of 20
-hand-placed waypoints.
+**Verdict, from "10." above: the round 14/15 packet aesthetic does not survive
+contact with real data unmodified, and the failure is measured, narrow, and
+fixable — not a sign the packet model is wrong.** Two concrete causes, both in
+`phase-0-prototype/src/data/`, neither in `phase-1-validation/`:
 
-**The key thing that makes this cheap: the input data already exists in this
-repo, fetched.** `phase-1-validation/raw_clean.json` (9.5 MB) is real,
-already-fetched Open-Meteo Marine API data for the Dec 2025 Mullaghmore event
-— hourly `swell_wave_height/direction/period`, `wind_wave_*`, and
-`secondary_swell_wave_*`, keyed by `"lat,lon"`, spanning `2025-12-11` to
-`2025-12-24` across 401 North Atlantic ocean cells. This is the same file
-Phase −1 validated the ≥11s threshold against, so its physics are already
-trusted. **No network access is required for this spike** — confirmed blocked
-twice now (`fetch_real_data.py`'s own docstring, and a direct `curl` to
-`marine-api.open-meteo.com` from this session, both refused at the proxy).
-Four more real windows sit alongside it (`raw_clean2/3/4_*.json`, one per
-Ireland/Nazaré event, plus `raw_messy.json` and `raw_pacific_2024.json`) if
-the first doesn't produce an interesting frame.
+1. `interpolate.ts`'s `ENERGY_RANGE` (0..400) is calibrated against Helena's
+   invented energy span. The real track this spike converted
+   (`phase-1-validation/output_clean/swell_pulse_track35.json`) measures
+   138-1,078 — half its 16 points already clamp to `amp=1.0`, flattening the
+   "brightest = leading edge = motion" cue round 14 built (see "10." for the
+   exact numbers).
+2. `packetFromFront`'s front-distance calculation assumes a source's
+   interpolated position moves monotonically away from its origin. A real
+   tracked cluster's centroid can double back as the region-grown blob
+   reshapes (measured directly on this same track: grows 24→195→165 cells,
+   direction swings 234.7°→317.1°and partway back) — something Helena's
+   hand-placed, monotonic path can never exercise, so no round before this one
+   tested it.
 
-**The right shape for the bridge, and why not to build a grid-to-globe
-renderer from scratch:** the globe shader doesn't consume a grid — it
-consumes a handful of point *sources* (`SwellSource` in
-`phase-0-prototype/src/data/swellSources.ts`: `origin`, `direction`,
-`periodS`, `heightM`, `spawnOffsetHours`, plus an optional `pulse` for
-waypoint-driven sources like Helena). `tracking.py`'s `Track` — `id`,
-`first_detected_hour`, `parent_id`, a `path` of `(hour, lat, lon)` centroids —
-is already most of the way to that shape; it's the exact reduction from
-"400 noisy cells" to "one followable thing" that Phase −1 spent five events
-validating. The natural spike is: run the existing clustering/tracking
-pipeline against `raw_clean.json`, take whatever track(s) survive at the
-validated ≥11s threshold, and convert each into a `SwellSource` (or a full
-`SwellPulse` per `types.ts`, reusing the `pulse`-driven path `swellSources.ts`
-already has for Helena) rather than inventing a new grid-sampling scheme for
-the shader.
-
-**One thing already fixed while writing this up:** `real_data.py` and
-`smoothing.py` both still derived `category` from `period >= 12.0` — the
-pre-revision threshold. Both predate the round-4/5 decision that moved it to
-11s (`MASTER_BUILD_PLAN.md` decision-log row 16) and neither was updated when
-it landed. Harmless in practice (`clustering.py`/`tracking.py` take the
-threshold as an explicit parameter, not this field — confirmed by grepping for
-consumers before touching it), but now fixed in both files so a second stale
-copy of an already-revised number doesn't sit there to confuse whoever reads
-it next.
-
-**Concrete steps:**
-
-1. In `phase-1-validation/`, run the existing pipeline against `raw_clean.json`
-   at `period_threshold=11` (already-validated setting) and confirm which
-   track(s) come out — `test_event.py raw_clean.json` reproduces this and
-   writes a centroid-path plot to inspect first.
-2. Write a small converter (new file, e.g. `phase-1-validation/to_swell_source.py`
-   or directly in TypeScript under `phase-0-prototype/src/data/`) from a
-   `Track`'s path to either a `SwellSource` (simplest: origin = first
-   centroid, direction = initial bearing, period/height = the track's own
-   mean or time series) or a `SwellPulse` (richer: per-point energy/period/
-   heading, consumed via the existing Helena-style `pulse` path). Prefer
-   `SwellPulse` — it's the real §9.1 contract and it's what Phase 2 needs
-   anyway, so building the converter once against the real shape avoids a
-   second rewrite.
-3. Swap it in — either alongside or in place of one of `swellSources.ts`'s
-   five invented decorative storms — and render the existing "+3 Days"
-   comparison frame used throughout rounds 14-17.
-4. Judge, don't just gate: does it stay calm and legible per §5.1, or does
-   real per-cell noise (period drifting several seconds within a day —
-   documented in `phase-1-validation/README.md`'s "What the real clean-window
-   data actually showed") read as flicker or chaos against the current
-   floored-decay model? If it breaks down, that's the finding — it means the
-   art-direction layer needs adjustment before real data can be trusted
-   for good, per §8's Phase 2 instruction ("confirm the engine still looks
-   calm with real, messier data — adjust the art-direction layer, not the
-   underlying data").
-5. Whatever the result, write it up as its own dated entry in this file the
-   same way rounds 1-17 are documented, with the frame(s) it produced. This
-   is a spike, not a phase deliverable — keep it out of `phase-0-prototype/`'s
-   production data path unless the result is good enough to actually replace
-   a decorative source outright.
-
-**Explicitly out of scope for this spike** — these are real Phase 1 and stay
-behind Thread A: a scheduled ingestion job, object storage / CDN, the full
-seven-basin global grid (`global_grid.py` exists and is ready for this, but
-wiring it up is Phase 1 proper), and anything client-facing.
+**Not re-opening this as a new spike.** Per §8's own instruction, this is
+Phase 2 art-direction work (recalibrate `ENERGY_RANGE` against real data's
+actual range once more than one track has been measured; decide whether
+`packetFromFront` needs a monotonic-distance clamp or a different front
+measure entirely for non-monotonic tracks), gated the same place the rest of
+Phase 2 is — behind Thread A passing. Nothing to hand a fresh agent here
+until then; `to_swell_pulse.py` is real, re-runnable, and already produces
+the `SwellPulse` shape Phase 2 will consume, so this doesn't need repeating
+against the other four real windows (`raw_clean2/3/4_*.json`,
+`raw_messy.json`, `raw_pacific_2024.json`) unless a second real track's
+numbers are specifically wanted before then.
 
 ### Lower-priority open items, not blocking either thread
 `MASTER_BUILD_PLAN.md` §12:

@@ -1,0 +1,156 @@
+{
+  "id": "mullaghmore-dec2025-spike",
+  "name": "Track 35",
+  "first_detected_at": "2025-12-16T12:00:00Z",
+  "ended_at": "2025-12-20T06:00:00Z",
+  "parent_id": null,
+  "origin_basin": "north_atlantic",
+  "category": "groundswell",
+  "path": [
+    {
+      "timestamp": "2025-12-16T12:00:00Z",
+      "lat": 46.5833,
+      "lon": -43.7499,
+      "energy": 1023.844,
+      "swell_height": 9.115,
+      "swell_period": 12.324,
+      "heading_deg": 54.7
+    },
+    {
+      "timestamp": "2025-12-16T18:00:00Z",
+      "lat": 48.7568,
+      "lon": -40.027,
+      "energy": 1078.348,
+      "swell_height": 9.161,
+      "swell_period": 12.849,
+      "heading_deg": 61.3
+    },
+    {
+      "timestamp": "2025-12-17T00:00:00Z",
+      "lat": 49.7188,
+      "lon": -37.9069,
+      "energy": 777.354,
+      "swell_height": 7.693,
+      "swell_period": 13.134,
+      "heading_deg": 63.4
+    },
+    {
+      "timestamp": "2025-12-17T06:00:00Z",
+      "lat": 50.2025,
+      "lon": -33.1353,
+      "energy": 889.699,
+      "swell_height": 8.146,
+      "swell_period": 13.406,
+      "heading_deg": 69.0
+    },
+    {
+      "timestamp": "2025-12-17T12:00:00Z",
+      "lat": 49.1525,
+      "lon": -34.0122,
+      "energy": 721.957,
+      "swell_height": 7.348,
+      "swell_period": 13.372,
+      "heading_deg": 80.9
+    },
+    {
+      "timestamp": "2025-12-17T18:00:00Z",
+      "lat": 48.6131,
+      "lon": -31.2278,
+      "energy": 667.151,
+      "swell_height": 7.049,
+      "swell_period": 13.428,
+      "heading_deg": 88.5
+    },
+    {
+      "timestamp": "2025-12-18T00:00:00Z",
+      "lat": 46.6792,
+      "lon": -29.1414,
+      "energy": 566.553,
+      "swell_height": 6.52,
+      "swell_period": 13.329,
+      "heading_deg": 94.0
+    },
+    {
+      "timestamp": "2025-12-18T06:00:00Z",
+      "lat": 45.6222,
+      "lon": -28.7633,
+      "energy": 446.587,
+      "swell_height": 5.785,
+      "swell_period": 13.343,
+      "heading_deg": 98.3
+    },
+    {
+      "timestamp": "2025-12-18T12:00:00Z",
+      "lat": 43.7641,
+      "lon": -28.7848,
+      "energy": 322.825,
+      "swell_height": 5.01,
+      "swell_period": 12.863,
+      "heading_deg": 105.0
+    },
+    {
+      "timestamp": "2025-12-18T18:00:00Z",
+      "lat": 41.5732,
+      "lon": -24.5095,
+      "energy": 300.99,
+      "swell_height": 4.9,
+      "swell_period": 12.535,
+      "heading_deg": 105.2
+    },
+    {
+      "timestamp": "2025-12-19T00:00:00Z",
+      "lat": 39.3292,
+      "lon": -25.1959,
+      "energy": 235.419,
+      "swell_height": 4.405,
+      "swell_period": 12.131,
+      "heading_deg": 116.0
+    },
+    {
+      "timestamp": "2025-12-19T06:00:00Z",
+      "lat": 37.6471,
+      "lon": -29.671,
+      "energy": 170.556,
+      "swell_height": 3.76,
+      "swell_period": 12.062,
+      "heading_deg": 130.1
+    },
+    {
+      "timestamp": "2025-12-19T12:00:00Z",
+      "lat": 36.4194,
+      "lon": -31.2402,
+      "energy": 138.174,
+      "swell_height": 3.403,
+      "swell_period": 11.929,
+      "heading_deg": 136.7
+    },
+    {
+      "timestamp": "2025-12-19T18:00:00Z",
+      "lat": 35.8636,
+      "lon": -31.8497,
+      "energy": 142.719,
+      "swell_height": 3.455,
+      "swell_period": 11.953,
+      "heading_deg": 137.1
+    },
+    {
+      "timestamp": "2025-12-20T00:00:00Z",
+      "lat": 37.3226,
+      "lon": -30.4639,
+      "energy": 202.786,
+      "swell_height": 4.093,
+      "swell_period": 12.102,
+      "heading_deg": 118.1
+    },
+    {
+      "timestamp": "2025-12-20T06:00:00Z",
+      "lat": 36.7515,
+      "lon": -28.5284,
+      "energy": 211.532,
+      "swell_height": 4.144,
+      "swell_period": 12.315,
+      "heading_deg": 116.6
+    }
+  ],
+  "narrative_description": "Real North Atlantic groundswell tracked from Open-Meteo Marine API data (raw_clean.json, 90h, 3619km), period_threshold=11 -- Thread B of the pre-Phase-1 ingestion spike, not invented data."
+}
