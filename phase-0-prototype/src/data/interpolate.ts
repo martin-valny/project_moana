@@ -47,13 +47,21 @@ export function interpolatePulseAt(pulse: SwellPulse, timestamp: Date): SwellPat
 
 /**
  * Normalises §4.4's H²×T energy proxy to 0..1 for shader consumption.
- * The range is Helena's own min/max (roughly 22 at her weakest, 353 at
- * peak) — reasonable for a single hardcoded Phase 0 swell, not a
- * general-purpose calibration. Revisit once a real populated
- * `SwellFieldFrame` exists to normalise against.
+ *
+ * The ingestion spike (PROGRESS.md "What's next" — round "10.") found that a
+ * fixed 0..400 range, calibrated only to Helena's own invented 22-353 span,
+ * was the bug: real tracked energy measures 138-2,497 across the real
+ * windows in `phase-1-validation/` (see `to_swell_pulse.py`'s output and the
+ * other four `raw_*` files), so a fixed Helena-only ceiling clamped roughly
+ * half of a real track's points to maximum brightness and flattened round
+ * 14's leading-edge-brightest motion cue. There is no single fixed number
+ * that is "the real range" — a bigger storm always exists — so `range` is now
+ * a required parameter instead of a module constant: callers compute it from
+ * whichever sources are actually on screen (`computeEnergyRange` in
+ * `swellSources.ts`) so relative brightness stays meaningful for whatever mix
+ * of invented and real sources is loaded, rather than being pinned to one
+ * dataset's numbers.
  */
-const ENERGY_RANGE = { min: 0, max: 400 };
-
-export function normalizeEnergy(energy: number): number {
-  return Math.min(1, Math.max(0, (energy - ENERGY_RANGE.min) / (ENERGY_RANGE.max - ENERGY_RANGE.min)));
+export function normalizeEnergy(energy: number, range: { min: number; max: number }): number {
+  return Math.min(1, Math.max(0, (energy - range.min) / (range.max - range.min)));
 }

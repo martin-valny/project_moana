@@ -2,8 +2,9 @@ import { Vector3 } from 'three';
 import { latLonToVector3 } from '../three/geo';
 import { HELENA_MIN_OFFSET_HOURS } from './helena';
 import { interpolatePulseAt, normalizeEnergy } from './interpolate';
+import { buildRealTrackPulse } from './realTrackPulse';
 import { packetAmplitude, packetAt, packetFromFront, type SwellSourceState, type Vec3 } from './swellField';
-import type { SwellPulse } from './types';
+import type { SwellPathPoint, SwellPulse } from './types';
 
 /**
  * Generating storms for the globe's swell-propagation field (round 9).
@@ -142,16 +143,9 @@ const INVENTED: RawSource[] = [
     heightM: 3.9,
     spawnOffsetHours: -30,
   },
-  {
-    id: 'boreas',
-    name: 'Boreas',
-    lat: 62,
-    lon: -18,
-    bearingDeg: 200, // SSW out of the Norwegian Sea
-    periodS: 13,
-    heightM: 3.4,
-    spawnOffsetHours: -20,
-  },
+  // 'boreas' (invented, Norwegian Sea) is swapped out below for the real
+  // North Atlantic track the ingestion spike produced, keeping the source
+  // count at MAX_SWELL_SOURCES. See buildSwellSources.
 ];
 
 function toSource(raw: RawSource): SwellSource {
@@ -166,19 +160,9 @@ function toSource(raw: RawSource): SwellSource {
   };
 }
 
-/**
- * Helena plus the invented sources.
- *
- * Helena's entry is derived from her own first waypoint rather than
- * restated — position, period, height and heading all come off
- * `pulse.path[0]`, so her source and her rendered path cannot disagree.
- * (An earlier round shipped a hand-written heading that contradicted the
- * waypoints it was meant to describe; deriving is what stops that.)
- */
-export function buildSwellSources(pulse: SwellPulse): SwellSource[] {
+function pulseSource(pulse: SwellPulse): SwellSource {
   const first = pulse.path[0];
-
-  const helena: SwellSource = {
+  return {
     id: pulse.id,
     name: pulse.name,
     origin: latLonToVector3(first.lat, first.lon, 1),
@@ -188,8 +172,59 @@ export function buildSwellSources(pulse: SwellPulse): SwellSource[] {
     spawnOffsetHours: HELENA_MIN_OFFSET_HOURS,
     pulse,
   };
+}
 
-  return [helena, ...INVENTED.map(toSource)].slice(0, MAX_SWELL_SOURCES);
+/**
+ * Helena, the real tracked source from the ingestion spike, and the
+ * remaining invented sources.
+ *
+ * Helena's entry is derived from her own first waypoint rather than
+ * restated — position, period, height and heading all come off
+ * `pulse.path[0]`, so her source and her rendered path cannot disagree.
+ * (An earlier round shipped a hand-written heading that contradicted the
+ * waypoints it was meant to describe; deriving is what stops that.) The
+ * real track is built the same way, for the same reason.
+ */
+export function buildSwellSources(pulse: SwellPulse): SwellSource[] {
+  const helena = pulseSource(pulse);
+  const realTrack = pulseSource(buildRealTrackPulse());
+
+  return [helena, realTrack, ...INVENTED.map(toSource)].slice(0, MAX_SWELL_SOURCES);
+}
+
+/**
+ * Cg-driven invented sources have no time series — a single fixed
+ * `heightM^2 * periodS` value — so they need an externally chosen ceiling to
+ * read against. This is the same 400 the whole prototype shipped with
+ * through round 17, kept as-is: none of the invented sources are what the
+ * ingestion spike found broken, so this range, and everything it was tuned
+ * against (M2/M8/M9 in the metrics harness), is untouched by this fix.
+ */
+const INVENTED_ENERGY_RANGE = { min: 0, max: 400 };
+
+/**
+ * Brightness normalisation range for one source (round "10." of the Phase
+ * −1 ingestion spike, PROGRESS.md "What's next"). A single range shared by
+ * every source was tried first and rejected: calibrating it to whichever
+ * source happens to be biggest makes every *other* source dimmer whenever a
+ * bigger one is loaded, which regressed Helena and every invented source's
+ * already-tuned brightness for no reason connected to the actual bug.
+ *
+ * The actual bug was narrower: a fixed 0..400 ceiling, calibrated only to
+ * Helena's own invented 22-353 energy span, clamped roughly half of a real
+ * tracked storm's points to maximum brightness, flattening round 14's
+ * leading-edge-brightest motion cue *within that one source's own path*.
+ * The fix that matches the bug: a pulse-driven source normalises against
+ * its *own* path's energy span, so its own arc always uses the full 0..1
+ * range regardless of how big or small it is in absolute terms — which,
+ * for Helena, reproduces the exact 0..353 the old hardcoded constant used,
+ * since that constant was already "Helena's own min/max" per its own
+ * original comment. Cg-driven invented sources have no path to derive a
+ * range from, so they keep `INVENTED_ENERGY_RANGE`, unchanged.
+ */
+function energyRangeFor(source: SwellSource): { min: number; max: number } {
+  if (source.pulse) return { min: 0, max: Math.max(...source.pulse.path.map((p) => p.energy)) };
+  return INVENTED_ENERGY_RANGE;
 }
 
 /**
@@ -210,7 +245,34 @@ export function buildSwellSources(pulse: SwellPulse): SwellSource[] {
  * this shape of bug — the hand-written heading that contradicted its own
  * waypoints, the 'WNW' label on an ENE path. The invented storms keep `Cg`
  * because they have no path: for them, `Cg` *is* the data.
+ *
+ * **A path-backed front's distance is the max angular distance any
+ * already-reached waypoint has achieved, not the current waypoint's own
+ * distance.** Helena's hand-placed path moves outward every step, so those
+ * two things were always the same number for her — round "10."'s real
+ * tracked source doesn't: a region-grown cluster's centroid can drift
+ * backward as the cluster reshapes (measured directly: a 90h real track
+ * whose distance from its own origin shrinks and regrows twice). Reading
+ * the current point's distance directly would make that packet's rendered
+ * front radius shrink and regrow with it, which is not what "how far has
+ * this swell's energy reached" means physically. `frontDistanceRad` fixes
+ * that by tracking the running max instead.
  */
+function frontDistanceRad(pulse: SwellPulse, origin: Vector3, at: SwellPathPoint): number {
+  const uptoMs = new Date(at.timestamp).getTime();
+  let maxRad = 0;
+  for (const pt of pulse.path) {
+    if (new Date(pt.timestamp).getTime() > uptoMs) break; // path is chronological
+    const d = Math.acos(Math.max(-1, Math.min(1, origin.dot(latLonToVector3(pt.lat, pt.lon, 1)))));
+    maxRad = Math.max(maxRad, d);
+  }
+  // Also covers `at` itself for the case where it's interpolated strictly
+  // between two waypoints rather than landing exactly on one already covered
+  // by the loop above.
+  const dAt = Math.acos(Math.max(-1, Math.min(1, origin.dot(latLonToVector3(at.lat, at.lon, 1)))));
+  return Math.max(maxRad, dAt);
+}
+
 export function resolveSwellSources(
   sources: readonly SwellSource[],
   startTime: Date,
@@ -232,10 +294,7 @@ export function resolveSwellSources(
     const periodS = at ? at.swell_period : s.periodS;
 
     const packet = at
-      ? packetFromFront(
-          Math.acos(Math.max(-1, Math.min(1, s.origin.dot(latLonToVector3(at.lat, at.lon, 1))))),
-          periodS,
-        )
+      ? packetFromFront(frontDistanceRad(s.pulse!, s.origin, at), periodS)
       : packetAt(s.periodS, offsetHours - s.spawnOffsetHours);
 
     // Helena's energy used to be taken from `pulse.path[0]` and never
@@ -246,9 +305,7 @@ export function resolveSwellSources(
     // globe, against Kaimana's 0.637 — so the swell the panel is about was
     // the hardest one to see. Same shape of bug as her front speed: a scalar
     // frozen at build time standing in for a series that was right there.
-    const energy = normalizeEnergy(
-      at ? at.energy : s.heightM * s.heightM * s.periodS,
-    );
+    const energy = normalizeEnergy(at ? at.energy : s.heightM * s.heightM * s.periodS, energyRangeFor(s));
     const ramp = spawnRamp01(s.spawnOffsetHours, offsetHours);
 
     return {

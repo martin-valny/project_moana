@@ -146,17 +146,20 @@ lower threshold.
    No agent session can run it, and Phase 0 is not finishable without it. With
    filaments closed, this is not merely the biggest outstanding item, it is
    very nearly the only one, and it needs the user.
-2. **The pre-Phase-1 ingestion spike is done (see "10." under the Phase −1
-   investigation, and "Thread B" under "What's next").** It answered the
-   question it was scoped to answer: the round 14/15 visual model does not
-   survive contact with real per-cell data unmodified — real energy values
-   (138-1,078 measured) blow past the shader's Helena-calibrated
-   `ENERGY_RANGE` (0..400), clamping half a real track's points to maximum
-   brightness and flattening the leading-edge-as-motion cue, and a real
-   track's centroid can double back in a way Helena's hand-placed path never
-   does. Both are narrow, named, fixable Phase 2 art-direction items, not a
-   sign the packet model is wrong — and both stay gated behind the §8 item
-   above, per the plan's own build order. Real Phase 1 (scheduled ingestion,
+2. **The pre-Phase-1 ingestion spike is done, and its fix is live (see "10."
+   and "11." under the Phase −1 investigation, and "Thread B" under "What's
+   next").** The spike found that real per-cell energy (138-1,078 measured)
+   blew past the shader's Helena-calibrated `ENERGY_RANGE`, clamping half a
+   real track's points to maximum brightness, and that a real track's
+   centroid can double back in a way Helena's hand-placed path never does.
+   Both are now fixed in `phase-0-prototype/src/data/` — pulse-driven
+   sources normalise against their own path's own energy span instead of a
+   shared ceiling, and front distance tracks a running max instead of the
+   current, possibly-backtracked position — on the user's direct
+   instruction rather than waiting behind the §8 item above. The real track
+   is now a live sixth source in the same build §8 will eventually test.
+   What's still open under this: the full metrics-harness re-run (item 1
+   under "Thread B"), not yet done. Real Phase 1 (scheduled ingestion,
    storage, the full seven-basin grid) has still not been started, correctly
    — it's real Phase 1 work and was never in scope for this spike.
 3. **Nothing is known-broken.** Land treatment and the panel glyph were the
@@ -2606,14 +2609,86 @@ the packet model itself is wrong. That recalibration is real Phase 2 work
 (per §8: adjust art-direction, not the underlying tracker), not a second
 spike.
 
+### 11. The fix, put to the user directly, and promoted to production
+
+Round "10." above left this gated behind Thread A per §8's own build order.
+The user overrode that explicitly — asked for the fix and to see it on real
+data — so this is done now rather than deferred, on their direct instruction
+rather than an agent decision to jump the gate.
+
+**Both root causes from round "10." are fixed in
+`phase-0-prototype/src/data/`, nothing in `phase-1-validation/` changed:**
+
+1. **`normalizeEnergy` (`interpolate.ts`) now takes an explicit `range`
+   parameter instead of reading a hardcoded module constant.** First attempt
+   was a single range shared across every source, computed as the max peak
+   energy over whatever's loaded (`computeEnergyRange`) — built, screenshotted,
+   and rejected before commit: calibrating one shared ceiling to whichever
+   source is biggest makes every *other* source dimmer whenever a bigger one
+   is loaded, and the real track is ~3x bigger than Helena, so the fix
+   regressed Helena's and every invented source's already-tuned brightness
+   globe-wide for a problem that was never theirs (screenshots compared in
+   this round's diff, not committed — this rejected attempt never landed).
+   **What's actually in `swellSources.ts` now:** each *pulse-driven* source
+   (Helena, the real track) normalises against its own path's own energy
+   span via `energyRangeFor`, so its own arc always uses the full 0..1 range
+   regardless of absolute magnitude — for Helena this reproduces the exact
+   0..353 the old hardcoded constant used, since that constant was already
+   "Helena's own min/max" per its own original comment, just hardcoded
+   instead of derived. Cg-driven invented sources have no path to derive a
+   range from and keep the original fixed `INVENTED_ENERGY_RANGE` (0..400),
+   completely untouched — nothing about their tuning, or the M2/M8/M9 gates
+   built around it, changes.
+2. **`frontDistanceRad` (`swellSources.ts`, replacing the inline
+   `Math.acos` call in `resolveSwellSources`) reads the *running max*
+   angular distance any already-reached waypoint has achieved, not the
+   current waypoint's own distance.** Helena's hand-placed path never
+   needed this — she always moves outward — but the real track's centroid
+   drifts backward as its region-grown cluster reshapes (the same 90h track
+   from round "10.": distance from origin shrinks and regrows twice). Taking
+   the running max means the rendered front can only ever advance or hold,
+   never visibly retreat, which is what "how far has this swell's energy
+   reached" means physically.
+
+**Verified:** `npm run build` and `npm run lint` clean. `smoke-test.mjs`
+(both viewports), `panel-glass-test.mjs`, and `rotate-test.mjs` all pass with
+zero console errors, against the real track wired in as a genuine sixth
+source (replacing invented `boreas`, same as round "10."'s reverted spike —
+this time kept). Real per-cell energy (138-1,078 across this one track) no
+longer clamps: at "3 Days" the real track's band shows the same soft,
+graded brightness structure the invented sources have, where before the fix
+it was a flat, textureless wash (screenshots compared directly, not
+committed).
+
+**One new thing this round found, not a regression:** at "Now" and
+"Tomorrow" the real track renders as a bright, fairly hard-edged crescent —
+but so does Helena at "Now" in the completely unmodified app (confirmed by
+reverting this round's two files and reshooting: same shape, same cause).
+`MIN_BAND_WIDTH_RAD`'s own comment in `swellField.ts` already documents this
+exact look ("Helena is the case that forced it — her front is derived from
+her own slow waypoint path, so at 'Now' she is only 8 deg out, and a [narrow]
+band there rendered as a crisp little moon rather than a wisp of weather"),
+raised from 0.05 to 0.12 rad specifically to soften it, not eliminate it. The
+real track has the same shape early in its life for the same reason (a
+young, narrow band) — this is existing, accepted behaviour for any young
+pulse-driven source, not something introduced here, so nothing was changed
+for it.
+
+**Not re-run:** the Stage A/B/C metrics harness (`parity-probe.mjs`,
+`field-metrics.mjs`) and the full `timeline-shots.mjs` sweep, since neither
+invented-source calibration nor Helena's own numbers changed — only a new
+sixth source and how *its* energy and front distance are computed. Worth a
+full harness pass before this is treated as done for Phase 2 proper, not
+required to answer "how does it look."
+
 ---
 
 ## What's next
 
 **Two independent threads, and they can run in parallel — neither blocks the
 other.** Thread A is the §8 human gate, unchanged from before and still
-needing the user. Thread B — the ingestion spike — is now done (see "10." above);
-what's left under it is a narrower, concretely-scoped follow-up.
+needing the user. Thread B — the ingestion spike and its fix — is now done
+(see "10." and "11." above); what's left is a narrower harness follow-up.
 
 ### Thread A — the §8 gate (unchanged, still needs the user)
 
@@ -2625,38 +2700,36 @@ the filament question — see the box at the top of this file — so there may b
 nothing left to iterate on). If it fails, §8 says iterate on shaders/motion/
 typography, not add data complexity to compensate.
 
-### Thread B — done: the ingestion spike answered its question
+### Thread B — done: the ingestion spike found a bug and fixed it
 
-**Verdict, from "10." above: the round 14/15 packet aesthetic does not survive
-contact with real data unmodified, and the failure is measured, narrow, and
-fixable — not a sign the packet model is wrong.** Two concrete causes, both in
-`phase-0-prototype/src/data/`, neither in `phase-1-validation/`:
+**Round "10." found it, round "11." fixed it, on the user's direct
+instruction rather than waiting behind Thread A.** The real track from
+`phase-1-validation/output_clean/swell_pulse_track35.json` is now a live
+sixth source in `phase-0-prototype/src/data/swellSources.ts` (replacing
+invented `boreas`), with both root causes fixed: `normalizeEnergy` now
+normalises each pulse-driven source against its own path's energy span
+(`energyRangeFor`) instead of a shared, Helena-only ceiling, and
+`frontDistanceRad` tracks the running-max distance a track has reached
+instead of its current, possibly-backtracked position. Helena's own
+calibration and every invented source are numerically untouched by this —
+see "11." for the full before/after and what was tried and rejected first.
 
-1. `interpolate.ts`'s `ENERGY_RANGE` (0..400) is calibrated against Helena's
-   invented energy span. The real track this spike converted
-   (`phase-1-validation/output_clean/swell_pulse_track35.json`) measures
-   138-1,078 — half its 16 points already clamp to `amp=1.0`, flattening the
-   "brightest = leading edge = motion" cue round 14 built (see "10." for the
-   exact numbers).
-2. `packetFromFront`'s front-distance calculation assumes a source's
-   interpolated position moves monotonically away from its origin. A real
-   tracked cluster's centroid can double back as the region-grown blob
-   reshapes (measured directly on this same track: grows 24→195→165 cells,
-   direction swings 234.7°→317.1°and partway back) — something Helena's
-   hand-placed, monotonic path can never exercise, so no round before this one
-   tested it.
-
-**Not re-opening this as a new spike.** Per §8's own instruction, this is
-Phase 2 art-direction work (recalibrate `ENERGY_RANGE` against real data's
-actual range once more than one track has been measured; decide whether
-`packetFromFront` needs a monotonic-distance clamp or a different front
-measure entirely for non-monotonic tracks), gated the same place the rest of
-Phase 2 is — behind Thread A passing. Nothing to hand a fresh agent here
-until then; `to_swell_pulse.py` is real, re-runnable, and already produces
-the `SwellPulse` shape Phase 2 will consume, so this doesn't need repeating
-against the other four real windows (`raw_clean2/3/4_*.json`,
-`raw_messy.json`, `raw_pacific_2024.json`) unless a second real track's
-numbers are specifically wanted before then.
+**What's left under this thread, now that the fix is live:**
+1. Re-run the Stage A/B/C metrics harness (`parity-probe.mjs`,
+   `field-metrics.mjs`) and the full `timeline-shots.mjs` sweep with the real
+   track wired in, and record the numbers the way rounds 1-17 do — this
+   round verified build/lint/smoke/panel/rotate and eyeballed screenshots,
+   not the full gate suite.
+2. Decide whether the real track stays wired in as a permanent sixth source
+   or reverts to spike status once §8 is actually run — right now it is
+   live in the same build the §8 gate will eventually test, which was not
+   true when round "10." wrote this file.
+3. Convert a second real track (`raw_clean2/3/4_*.json`,
+   `raw_pacific_2024.json`) through the same `to_swell_pulse.py` +
+   `energyRangeFor` path to confirm the per-source-range fix generalises
+   beyond the one track it was built against — not required to trust the
+   fix (the mechanism is data-independent), but cheap insurance before
+   treating this as settled.
 
 ### Lower-priority open items, not blocking either thread
 `MASTER_BUILD_PLAN.md` §12:
