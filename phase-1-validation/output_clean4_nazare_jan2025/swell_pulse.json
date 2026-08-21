@@ -1,0 +1,183 @@
+{
+  "id": "nazare-jan2025-spike",
+  "name": "Jan 2025 Nazare (Track 20)",
+  "first_detected_at": "2025-01-24T06:00:00Z",
+  "ended_at": "2025-01-29T00:00:00Z",
+  "parent_id": null,
+  "origin_basin": "north_atlantic",
+  "category": "groundswell",
+  "path": [
+    {
+      "timestamp": "2025-01-24T06:00:00Z",
+      "lat": 50.2857,
+      "lon": -40.5707,
+      "energy": 65.282,
+      "swell_height": 2.314,
+      "swell_period": 12.193,
+      "heading_deg": 146.4
+    },
+    {
+      "timestamp": "2025-01-24T12:00:00Z",
+      "lat": 49.3846,
+      "lon": -36.8463,
+      "energy": 157.635,
+      "swell_height": 3.708,
+      "swell_period": 11.466,
+      "heading_deg": 136.2
+    },
+    {
+      "timestamp": "2025-01-24T18:00:00Z",
+      "lat": 47.7778,
+      "lon": -36.6684,
+      "energy": 261.686,
+      "swell_height": 4.822,
+      "swell_period": 11.255,
+      "heading_deg": 135.8
+    },
+    {
+      "timestamp": "2025-01-25T06:00:00Z",
+      "lat": 42.0,
+      "lon": -39.5,
+      "energy": 99.614,
+      "swell_height": 2.98,
+      "swell_period": 11.219,
+      "heading_deg": 156.7
+    },
+    {
+      "timestamp": "2025-01-25T12:00:00Z",
+      "lat": 39.8333,
+      "lon": -37.0003,
+      "energy": 87.613,
+      "swell_height": 2.773,
+      "swell_period": 11.391,
+      "heading_deg": 158.2
+    },
+    {
+      "timestamp": "2025-01-25T18:00:00Z",
+      "lat": 39.0,
+      "lon": -31.552,
+      "energy": 94.695,
+      "swell_height": 2.882,
+      "swell_period": 11.401,
+      "heading_deg": 148.1
+    },
+    {
+      "timestamp": "2025-01-26T00:00:00Z",
+      "lat": 41.0526,
+      "lon": -26.629,
+      "energy": 458.0,
+      "swell_height": 6.187,
+      "swell_period": 11.963,
+      "heading_deg": 107.4
+    },
+    {
+      "timestamp": "2025-01-26T06:00:00Z",
+      "lat": 43.2,
+      "lon": -22.6013,
+      "energy": 418.407,
+      "swell_height": 5.866,
+      "swell_period": 12.158,
+      "heading_deg": 100.0
+    },
+    {
+      "timestamp": "2025-01-26T12:00:00Z",
+      "lat": 43.9091,
+      "lon": -20.1375,
+      "energy": 429.424,
+      "swell_height": 5.842,
+      "swell_period": 12.583,
+      "heading_deg": 95.7
+    },
+    {
+      "timestamp": "2025-01-26T18:00:00Z",
+      "lat": 44.5106,
+      "lon": -17.2545,
+      "energy": 661.285,
+      "swell_height": 7.327,
+      "swell_period": 12.318,
+      "heading_deg": 87.7
+    },
+    {
+      "timestamp": "2025-01-27T00:00:00Z",
+      "lat": 45.2857,
+      "lon": -16.3043,
+      "energy": 579.538,
+      "swell_height": 6.76,
+      "swell_period": 12.684,
+      "heading_deg": 91.6
+    },
+    {
+      "timestamp": "2025-01-27T06:00:00Z",
+      "lat": 45.2353,
+      "lon": -15.6754,
+      "energy": 497.533,
+      "swell_height": 6.287,
+      "swell_period": 12.588,
+      "heading_deg": 94.6
+    },
+    {
+      "timestamp": "2025-01-27T12:00:00Z",
+      "lat": 45.8507,
+      "lon": -15.16,
+      "energy": 497.121,
+      "swell_height": 6.312,
+      "swell_period": 12.476,
+      "heading_deg": 101.9
+    },
+    {
+      "timestamp": "2025-01-27T18:00:00Z",
+      "lat": 44.3333,
+      "lon": -15.9168,
+      "energy": 525.201,
+      "swell_height": 6.497,
+      "swell_period": 12.441,
+      "heading_deg": 113.5
+    },
+    {
+      "timestamp": "2025-01-28T00:00:00Z",
+      "lat": 41.1053,
+      "lon": -14.4729,
+      "energy": 451.493,
+      "swell_height": 6.082,
+      "swell_period": 12.206,
+      "heading_deg": 121.2
+    },
+    {
+      "timestamp": "2025-01-28T06:00:00Z",
+      "lat": 39.5238,
+      "lon": -14.7141,
+      "energy": 403.27,
+      "swell_height": 5.735,
+      "swell_period": 12.26,
+      "heading_deg": 139.6
+    },
+    {
+      "timestamp": "2025-01-28T12:00:00Z",
+      "lat": 38.0,
+      "lon": -14.1089,
+      "energy": 351.434,
+      "swell_height": 5.475,
+      "swell_period": 11.726,
+      "heading_deg": 135.4
+    },
+    {
+      "timestamp": "2025-01-28T18:00:00Z",
+      "lat": 34.1,
+      "lon": -15.799,
+      "energy": 277.833,
+      "swell_height": 4.847,
+      "swell_period": 11.824,
+      "heading_deg": 148.1
+    },
+    {
+      "timestamp": "2025-01-29T00:00:00Z",
+      "lat": 27.7419,
+      "lon": -19.902,
+      "energy": 128.409,
+      "swell_height": 3.315,
+      "swell_period": 11.686,
+      "heading_deg": 152.3
+    }
+  ],
+  "narrative_description": "Real groundswell tracked from Open-Meteo Marine API data (raw_clean4_nazare_jan2025.json, Jan 2025 Nazare, 114h, 5702km), period_threshold=11 -- ingestion spike QC, not invented data."
+}

@@ -160,7 +160,10 @@ function toSource(raw: RawSource): SwellSource {
   };
 }
 
-function pulseSource(pulse: SwellPulse): SwellSource {
+/** Exported for `qc-real-pulses.mjs` (round "12.") to build a `SwellSource`
+ * from an arbitrary real `SwellPulse` without going through `buildSwellSources`,
+ * which always returns the one fixed six-source lineup. */
+export function pulseSource(pulse: SwellPulse): SwellSource {
   const first = pulse.path[0];
   return {
     id: pulse.id,
@@ -222,7 +225,7 @@ const INVENTED_ENERGY_RANGE = { min: 0, max: 400 };
  * original comment. Cg-driven invented sources have no path to derive a
  * range from, so they keep `INVENTED_ENERGY_RANGE`, unchanged.
  */
-function energyRangeFor(source: SwellSource): { min: number; max: number } {
+export function energyRangeFor(source: SwellSource): { min: number; max: number } {
   if (source.pulse) return { min: 0, max: Math.max(...source.pulse.path.map((p) => p.energy)) };
   return INVENTED_ENERGY_RANGE;
 }
@@ -258,7 +261,7 @@ function energyRangeFor(source: SwellSource): { min: number; max: number } {
  * this swell's energy reached" means physically. `frontDistanceRad` fixes
  * that by tracking the running max instead.
  */
-function frontDistanceRad(pulse: SwellPulse, origin: Vector3, at: SwellPathPoint): number {
+export function frontDistanceRad(pulse: SwellPulse, origin: Vector3, at: SwellPathPoint): number {
   const uptoMs = new Date(at.timestamp).getTime();
   let maxRad = 0;
   for (const pt of pulse.path) {

@@ -1,0 +1,165 @@
+{
+  "id": "ireland-nov2023-spike",
+  "name": "Nov 2023 Ireland (Track 25)",
+  "first_detected_at": "2023-11-07T06:00:00Z",
+  "ended_at": "2023-11-11T06:00:00Z",
+  "parent_id": null,
+  "origin_basin": "north_atlantic",
+  "category": "groundswell",
+  "path": [
+    {
+      "timestamp": "2023-11-07T06:00:00Z",
+      "lat": 53.5,
+      "lon": -44.0,
+      "energy": 68.114,
+      "swell_height": 2.366,
+      "swell_period": 12.163,
+      "heading_deg": 150.9
+    },
+    {
+      "timestamp": "2023-11-07T12:00:00Z",
+      "lat": 52.875,
+      "lon": -39.499,
+      "energy": 266.251,
+      "swell_height": 4.739,
+      "swell_period": 11.856,
+      "heading_deg": 95.5
+    },
+    {
+      "timestamp": "2023-11-07T18:00:00Z",
+      "lat": 53.5172,
+      "lon": -39.964,
+      "energy": 490.28,
+      "swell_height": 6.43,
+      "swell_period": 11.86,
+      "heading_deg": 103.4
+    },
+    {
+      "timestamp": "2023-11-08T00:00:00Z",
+      "lat": 52.6512,
+      "lon": -38.28,
+      "energy": 506.276,
+      "swell_height": 6.426,
+      "swell_period": 12.259,
+      "heading_deg": 111.8
+    },
+    {
+      "timestamp": "2023-11-08T06:00:00Z",
+      "lat": 51.8519,
+      "lon": -35.8301,
+      "energy": 530.462,
+      "swell_height": 6.512,
+      "swell_period": 12.509,
+      "heading_deg": 109.9
+    },
+    {
+      "timestamp": "2023-11-08T12:00:00Z",
+      "lat": 49.8305,
+      "lon": -31.0377,
+      "energy": 467.711,
+      "swell_height": 6.145,
+      "swell_period": 12.388,
+      "heading_deg": 109.6
+    },
+    {
+      "timestamp": "2023-11-08T18:00:00Z",
+      "lat": 48.3617,
+      "lon": -29.7859,
+      "energy": 357.597,
+      "swell_height": 5.403,
+      "swell_period": 12.248,
+      "heading_deg": 110.6
+    },
+    {
+      "timestamp": "2023-11-09T00:00:00Z",
+      "lat": 47.9008,
+      "lon": -29.1806,
+      "energy": 279.718,
+      "swell_height": 4.777,
+      "swell_period": 12.257,
+      "heading_deg": 113.2
+    },
+    {
+      "timestamp": "2023-11-09T06:00:00Z",
+      "lat": 45.8857,
+      "lon": -28.5558,
+      "energy": 230.852,
+      "swell_height": 4.309,
+      "swell_period": 12.435,
+      "heading_deg": 118.4
+    },
+    {
+      "timestamp": "2023-11-09T12:00:00Z",
+      "lat": 44.6308,
+      "lon": -26.5124,
+      "energy": 185.809,
+      "swell_height": 3.869,
+      "swell_period": 12.413,
+      "heading_deg": 121.6
+    },
+    {
+      "timestamp": "2023-11-09T18:00:00Z",
+      "lat": 42.1905,
+      "lon": -26.9646,
+      "energy": 152.333,
+      "swell_height": 3.496,
+      "swell_period": 12.465,
+      "heading_deg": 131.5
+    },
+    {
+      "timestamp": "2023-11-10T00:00:00Z",
+      "lat": 37.7755,
+      "lon": -26.7496,
+      "energy": 127.815,
+      "swell_height": 3.211,
+      "swell_period": 12.395,
+      "heading_deg": 141.8
+    },
+    {
+      "timestamp": "2023-11-10T06:00:00Z",
+      "lat": 35.7917,
+      "lon": -27.2221,
+      "energy": 87.097,
+      "swell_height": 2.655,
+      "swell_period": 12.353,
+      "heading_deg": 147.2
+    },
+    {
+      "timestamp": "2023-11-10T12:00:00Z",
+      "lat": 32.7692,
+      "lon": -25.9774,
+      "energy": 77.521,
+      "swell_height": 2.502,
+      "swell_period": 12.388,
+      "heading_deg": 148.9
+    },
+    {
+      "timestamp": "2023-11-10T18:00:00Z",
+      "lat": 31.1475,
+      "lon": -27.5475,
+      "energy": 59.058,
+      "swell_height": 2.201,
+      "swell_period": 12.187,
+      "heading_deg": 152.3
+    },
+    {
+      "timestamp": "2023-11-11T00:00:00Z",
+      "lat": 29.2157,
+      "lon": -27.8008,
+      "energy": 46.366,
+      "swell_height": 1.966,
+      "swell_period": 11.992,
+      "heading_deg": 155.4
+    },
+    {
+      "timestamp": "2023-11-11T06:00:00Z",
+      "lat": 27.5814,
+      "lon": -29.8659,
+      "energy": 36.237,
+      "swell_height": 1.742,
+      "swell_period": 11.946,
+      "heading_deg": 159.1
+    }
+  ],
+  "narrative_description": "Real groundswell tracked from Open-Meteo Marine API data (raw_clean2_ireland_nov2023.json, Nov 2023 Ireland, 96h, 3890km), period_threshold=11 -- ingestion spike QC, not invented data."
+}

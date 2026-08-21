@@ -1,0 +1,129 @@
+{
+  "id": "pacific-jul2024-spike",
+  "name": "Jul 2024 Pacific crossing (Track 27)",
+  "first_detected_at": "2024-07-09T06:00:00Z",
+  "ended_at": "2024-07-12T06:00:00Z",
+  "parent_id": null,
+  "origin_basin": "north_pacific",
+  "category": "groundswell",
+  "path": [
+    {
+      "timestamp": "2024-07-09T06:00:00Z",
+      "lat": -36.5373,
+      "lon": -164.0165,
+      "energy": 318.715,
+      "swell_height": 5.155,
+      "swell_period": 11.995,
+      "heading_deg": 41.5
+    },
+    {
+      "timestamp": "2024-07-09T12:00:00Z",
+      "lat": -33.7978,
+      "lon": -162.3368,
+      "energy": 308.409,
+      "swell_height": 5.088,
+      "swell_period": 11.912,
+      "heading_deg": 39.9
+    },
+    {
+      "timestamp": "2024-07-09T18:00:00Z",
+      "lat": -32.6847,
+      "lon": -159.4533,
+      "energy": 312.988,
+      "swell_height": 5.093,
+      "swell_period": 12.064,
+      "heading_deg": 38.2
+    },
+    {
+      "timestamp": "2024-07-10T00:00:00Z",
+      "lat": -32.5833,
+      "lon": -157.4943,
+      "energy": 292.616,
+      "swell_height": 4.915,
+      "swell_period": 12.114,
+      "heading_deg": 38.3
+    },
+    {
+      "timestamp": "2024-07-10T06:00:00Z",
+      "lat": -31.2866,
+      "lon": -153.7796,
+      "energy": 245.287,
+      "swell_height": 4.512,
+      "swell_period": 12.047,
+      "heading_deg": 38.1
+    },
+    {
+      "timestamp": "2024-07-10T12:00:00Z",
+      "lat": -30.6579,
+      "lon": -150.6035,
+      "energy": 224.913,
+      "swell_height": 4.298,
+      "swell_period": 12.176,
+      "heading_deg": 38.4
+    },
+    {
+      "timestamp": "2024-07-10T18:00:00Z",
+      "lat": -29.3333,
+      "lon": -149.7246,
+      "energy": 207.281,
+      "swell_height": 4.112,
+      "swell_period": 12.257,
+      "heading_deg": 37.1
+    },
+    {
+      "timestamp": "2024-07-11T00:00:00Z",
+      "lat": -28.071,
+      "lon": -148.7364,
+      "energy": 194.234,
+      "swell_height": 3.965,
+      "swell_period": 12.358,
+      "heading_deg": 35.8
+    },
+    {
+      "timestamp": "2024-07-11T06:00:00Z",
+      "lat": -27.0805,
+      "lon": -146.8246,
+      "energy": 173.645,
+      "swell_height": 3.748,
+      "swell_period": 12.36,
+      "heading_deg": 35.7
+    },
+    {
+      "timestamp": "2024-07-11T12:00:00Z",
+      "lat": -26.5444,
+      "lon": -144.8857,
+      "energy": 161.35,
+      "swell_height": 3.609,
+      "swell_period": 12.389,
+      "heading_deg": 35.5
+    },
+    {
+      "timestamp": "2024-07-11T18:00:00Z",
+      "lat": -26.4151,
+      "lon": -142.3069,
+      "energy": 137.56,
+      "swell_height": 3.341,
+      "swell_period": 12.326,
+      "heading_deg": 34.6
+    },
+    {
+      "timestamp": "2024-07-12T00:00:00Z",
+      "lat": -24.0598,
+      "lon": -142.5975,
+      "energy": 117.342,
+      "swell_height": 3.077,
+      "swell_period": 12.395,
+      "heading_deg": 33.3
+    },
+    {
+      "timestamp": "2024-07-12T06:00:00Z",
+      "lat": -24.0598,
+      "lon": -139.5751,
+      "energy": 110.012,
+      "swell_height": 2.981,
+      "swell_period": 12.382,
+      "heading_deg": 32.0
+    }
+  ],
+  "narrative_description": "Real groundswell tracked from Open-Meteo Marine API data (raw_pacific_2024.json, Jul 2024 Pacific crossing, 72h, 3097km), period_threshold=11 -- ingestion spike QC, not invented data."
+}

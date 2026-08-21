@@ -2681,6 +2681,80 @@ sixth source and how *its* energy and front distance are computed. Worth a
 full harness pass before this is treated as done for Phase 2 proper, not
 required to answer "how does it look."
 
+### 12. QC: does the round "11." fix generalise past the one track it was built against?
+
+The user asked directly: rerun against more real data, for more QC. Round
+"10." only ever measured one real track (Mullaghmore). This round runs the
+same pipeline against the other four real windows already in this repo and
+checks the fix's two properties in code, not by eye.
+
+**`to_swell_pulse.py` generalised** to take any real window as an argument
+(`python3 to_swell_pulse.py raw_clean2_ireland_nov2023.json`) instead of
+being hardcoded to `raw_clean.json`, via a small `WINDOW_INFO` table (id/
+label/basin per file) and a `_neighbor_fn_for` that picks `pacific_grid.py`
+over the default North Atlantic `grid.py` for the Pacific crossing — the one
+window that needs it, per `test_pacific_event.py`'s own precedent. Same
+`period_threshold=11` params as round "10.", confirmed against each
+window's existing `sweep_results.json` before converting: all four already
+passed the clean-window bar at these exact params (Ireland 96h/3890km,
+Nazaré Feb 2024 132h/4002km, Nazaré Jan 2025 114h/5702km, Pacific
+72h/3097km). Output committed alongside each window's existing evidence:
+`output_clean2_ireland_nov2023/swell_pulse.json`,
+`output_clean3_nazare_feb2024/swell_pulse.json`,
+`output_clean4_nazare_jan2025/swell_pulse.json`,
+`output_pacific_2024/swell_pulse.json`.
+
+**Real energy ranges across all five tracks now measured, not just
+Mullaghmore's:** Ireland 36-531, Nazaré Feb 2024 36-438, Nazaré Jan 2025
+65-661, Pacific 110-319, against Mullaghmore's already-known 138-1,078 —
+confirms the earlier finding wasn't a one-off: every real track's range
+sits well above the old fixed 0-400 ceiling at its high end, and no two
+tracks share a range, which is the actual argument against ever picking a
+new fixed constant instead of the per-source fix.
+
+**Real centroid backtracking measured across all five, not assumed from
+one:** three of five tracks backtrack from their own origin at least once
+(Mullaghmore 3 of 15 steps, max single-step regression 182km; Ireland 1 of
+16, 41km; Nazaré Feb 2024 2 of 21, 43km) and two don't (Nazaré Jan 2025 and
+Pacific are both naturally monotonic, like Helena). So the bug round "10."
+found is real and recurring, not an artifact of the one track it was found
+on — and also not universal, which is exactly the kind of thing a
+one-track spike can't tell apart from noise.
+
+**`qc-real-pulses.mjs` (new, committed) makes both properties a runnable
+check instead of an eyeballed screenshot,** against the actual exported
+functions the app renders with (`frontDistanceRad`, `energyRangeFor`,
+`normalizeEnergy`, `pulseSource` — the first three newly exported from
+`swellSources.ts` for exactly this): for each of the five real pulses,
+samples 201 points across its own timespan and asserts front distance never
+regresses and normalised energy never pins more than 2 points at the exact
+0 or 1 ends. **All five pass:**
+
+```
+PASS Track 35 | range 0-1078 | front monotonic: true (worst regression 0.00000 rad) | amp clamped-high: 0/201, clamped-low: 0/201
+PASS Nov 2023 Ireland (Track 25) | range 0-530 | front monotonic: true (worst regression 0.00000 rad) | amp clamped-high: 1/201, clamped-low: 0/201
+PASS Feb 2024 Nazare (Track 21) | range 0-438 | front monotonic: true (worst regression 0.00000 rad) | amp clamped-high: 0/201, clamped-low: 0/201
+PASS Jan 2025 Nazare (Track 20) | range 0-661 | front monotonic: true (worst regression 0.00000 rad) | amp clamped-high: 0/201, clamped-low: 0/201
+PASS Jul 2024 Pacific crossing (Track 27) | range 0-319 | front monotonic: true (worst regression 0.00000 rad) | amp clamped-high: 1/201, clamped-low: 0/201
+```
+
+Run it with `node --import ./ts-resolve-hook.mjs --experimental-strip-types qc-real-pulses.mjs` from `phase-0-prototype/`.
+
+**Verified:** `npm run build` and `npm run lint` clean (including the three
+new exports and the QC script itself). `smoke-test.mjs`, `panel-glass-test.mjs`
+and `rotate-test.mjs` re-run against the same build and still pass — this
+round only added exports and a converter/QC script, the rendered app is
+byte-identical to round "11."'s.
+
+**What this settles, and what it doesn't.** It settles that the round "11."
+mechanism — normalise each pulse against its own path, track a running-max
+front — is correct by construction and holds for every real track measured
+so far, not just the one it was built against. It does not mean five real
+tracks are enough to call the *visual* question closed: only Mullaghmore's
+been put on the actual globe and screenshotted (round "11."). The other four
+are QC'd numerically here (`qc-real-pulses.mjs`) but not yet rendered and
+judged by eye the way §5.1 ultimately requires.
+
 ---
 
 ## What's next
@@ -2714,22 +2788,23 @@ instead of its current, possibly-backtracked position. Helena's own
 calibration and every invented source are numerically untouched by this —
 see "11." for the full before/after and what was tried and rejected first.
 
-**What's left under this thread, now that the fix is live:**
+**What's left under this thread, now that the fix is live and QC'd against
+all five real windows (see "12."):**
 1. Re-run the Stage A/B/C metrics harness (`parity-probe.mjs`,
    `field-metrics.mjs`) and the full `timeline-shots.mjs` sweep with the real
    track wired in, and record the numbers the way rounds 1-17 do — this
-   round verified build/lint/smoke/panel/rotate and eyeballed screenshots,
+   round verified build/lint/smoke/panel/rotate and `qc-real-pulses.mjs`,
    not the full gate suite.
 2. Decide whether the real track stays wired in as a permanent sixth source
    or reverts to spike status once §8 is actually run — right now it is
    live in the same build the §8 gate will eventually test, which was not
    true when round "10." wrote this file.
-3. Convert a second real track (`raw_clean2/3/4_*.json`,
-   `raw_pacific_2024.json`) through the same `to_swell_pulse.py` +
-   `energyRangeFor` path to confirm the per-source-range fix generalises
-   beyond the one track it was built against — not required to trust the
-   fix (the mechanism is data-independent), but cheap insurance before
-   treating this as settled.
+3. ~~Convert a second real track... to confirm the per-source-range fix
+   generalises~~ — done in "12.": all five real windows pass
+   `qc-real-pulses.mjs` (never clamps flat, front never regresses). What
+   that round explicitly did *not* do: render the other four on the actual
+   globe and judge them by eye the way Mullaghmore was in "11." — only the
+   numeric properties are checked for those four, not the look.
 
 ### Lower-priority open items, not blocking either thread
 `MASTER_BUILD_PLAN.md` §12:
