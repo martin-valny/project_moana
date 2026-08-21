@@ -1,6 +1,6 @@
 # Project Moana — Progress Report
 
-Last updated: 2026-08-20, branch `claude/moana-master-build-plan-v2-zjs07y`.
+Last updated: 2026-08-21, branch `claude/moana-master-build-plan-v2-zjs07y`.
 Working tree clean, everything below is pushed.
 
 **The current build is round 17.** Rounds 14 and 15 landed the current visual
@@ -2521,54 +2521,129 @@ confirmed the existing decision rather than changing it.
 
 ## What's next
 
-**Immediate next step (current as of round 12, HEAD `8ad90e9`):** see
-"What's still open — the actual gate" under the Phase 0 section above —
-it has the up-to-date state (the user has already seen a live-motion
-recording and been walked through the Phase 0/1 gate and architecture;
-what's actually outstanding is the human phone test itself, not more
-explanation). This paragraph used to say "show the build to the user
-again" pointing at round 9's HEAD; that instruction is long since done —
-twelve rounds of user feedback have landed since, twelve are documented
-above. Read "Status, one line" at the top of this file for the current
-summary before doing anything, don't assume this paragraph is current —
-it's exactly the kind of stale leftover it's now warning against (this
-text itself went un-updated across rounds 10–11 before being caught here
-in round 12's docs pass; the "### What's still open" subsection nearer
-the Phase 0 rounds is the one likely to be kept current going forward,
-check there first).
+**Two independent threads, and they can run in parallel — neither blocks the
+other.** Thread A is the §8 human gate, unchanged from before and still
+needing the user. Thread B is a new, concretely-scoped ingestion spike, laid
+out in full below because it's the piece a fresh agent session should pick up
+next.
 
-**Phase 0 is built** (`phase-0-prototype/`, see the section above) but
-**not yet passed** — it's blocked on the one thing no agent session can do
-itself: handing a phone to five non-surfers and timing whether they rotate
-the globe unprompted for 30+ seconds. Whoever picks this up next should
-run that test — once the user is done iterating on the visual — before
-treating Phase 0 as cleared and moving to Phase 1. If it fails, §8 says
-iterate on shaders/motion/typography rather than adding data complexity to
-compensate.
+### Thread A — the §8 gate (unchanged, still needs the user)
 
-**Once Phase 0 actually passes, Phase 1** (`MASTER_BUILD_PLAN.md` §8):
-global marine data ingestion — the scheduled job writing static JSON to
-object storage, built against the full global grid from the start, with
-derived energy/direction sanity-checked against a known real event before
-anything downstream trusts it. This is independent of the Phase −1
-validation harness above — it doesn't consume or reuse that code, only the
-now-settled ≥11s threshold and the general clustering/tracking approach it
-validated.
+**Phase 0 is built** (`phase-0-prototype/`) but **not yet passed** — blocked on
+the one thing no agent session can do itself: handing a phone to five
+non-surfers and timing whether they rotate the globe unprompted for 30+
+seconds. Run it once the user is done iterating on the visual (round 17 closed
+the filament question — see the box at the top of this file — so there may be
+nothing left to iterate on). If it fails, §8 says iterate on shaders/motion/
+typography, not add data complexity to compensate.
 
-**Lower-priority open items**, not blocking, listed in
+### Thread B — the pre-Phase-1 ingestion spike (this is the part to hand a fresh agent)
+
+**This is deliberately not Phase 1 itself.** §8's real Phase 1 — a scheduled
+job, object storage, the full global grid, all seven basins — stays gated
+behind Thread A passing, per the plan's own build order. What follows is
+smaller and does not wait: a spike to answer one question before more rounds
+go into the visual model — *does the round 14/15 packet aesthetic survive
+contact with real, messy per-cell data, or does swapping in real data mean
+retuning the whole visual at Phase 2?* Packet decay is floored at ~0.35
+instead of the physical 0.10 specifically to stay legible against *invented*
+data; nobody has checked whether that floor, or the packet shape generally,
+still reads once the input is a real noisy 400-cell grid instead of 20
+hand-placed waypoints.
+
+**The key thing that makes this cheap: the input data already exists in this
+repo, fetched.** `phase-1-validation/raw_clean.json` (9.5 MB) is real,
+already-fetched Open-Meteo Marine API data for the Dec 2025 Mullaghmore event
+— hourly `swell_wave_height/direction/period`, `wind_wave_*`, and
+`secondary_swell_wave_*`, keyed by `"lat,lon"`, spanning `2025-12-11` to
+`2025-12-24` across 401 North Atlantic ocean cells. This is the same file
+Phase −1 validated the ≥11s threshold against, so its physics are already
+trusted. **No network access is required for this spike** — confirmed blocked
+twice now (`fetch_real_data.py`'s own docstring, and a direct `curl` to
+`marine-api.open-meteo.com` from this session, both refused at the proxy).
+Four more real windows sit alongside it (`raw_clean2/3/4_*.json`, one per
+Ireland/Nazaré event, plus `raw_messy.json` and `raw_pacific_2024.json`) if
+the first doesn't produce an interesting frame.
+
+**The right shape for the bridge, and why not to build a grid-to-globe
+renderer from scratch:** the globe shader doesn't consume a grid — it
+consumes a handful of point *sources* (`SwellSource` in
+`phase-0-prototype/src/data/swellSources.ts`: `origin`, `direction`,
+`periodS`, `heightM`, `spawnOffsetHours`, plus an optional `pulse` for
+waypoint-driven sources like Helena). `tracking.py`'s `Track` — `id`,
+`first_detected_hour`, `parent_id`, a `path` of `(hour, lat, lon)` centroids —
+is already most of the way to that shape; it's the exact reduction from
+"400 noisy cells" to "one followable thing" that Phase −1 spent five events
+validating. The natural spike is: run the existing clustering/tracking
+pipeline against `raw_clean.json`, take whatever track(s) survive at the
+validated ≥11s threshold, and convert each into a `SwellSource` (or a full
+`SwellPulse` per `types.ts`, reusing the `pulse`-driven path `swellSources.ts`
+already has for Helena) rather than inventing a new grid-sampling scheme for
+the shader.
+
+**One thing already fixed while writing this up:** `real_data.py` and
+`smoothing.py` both still derived `category` from `period >= 12.0` — the
+pre-revision threshold. Both predate the round-4/5 decision that moved it to
+11s (`MASTER_BUILD_PLAN.md` decision-log row 16) and neither was updated when
+it landed. Harmless in practice (`clustering.py`/`tracking.py` take the
+threshold as an explicit parameter, not this field — confirmed by grepping for
+consumers before touching it), but now fixed in both files so a second stale
+copy of an already-revised number doesn't sit there to confuse whoever reads
+it next.
+
+**Concrete steps:**
+
+1. In `phase-1-validation/`, run the existing pipeline against `raw_clean.json`
+   at `period_threshold=11` (already-validated setting) and confirm which
+   track(s) come out — `test_event.py raw_clean.json` reproduces this and
+   writes a centroid-path plot to inspect first.
+2. Write a small converter (new file, e.g. `phase-1-validation/to_swell_source.py`
+   or directly in TypeScript under `phase-0-prototype/src/data/`) from a
+   `Track`'s path to either a `SwellSource` (simplest: origin = first
+   centroid, direction = initial bearing, period/height = the track's own
+   mean or time series) or a `SwellPulse` (richer: per-point energy/period/
+   heading, consumed via the existing Helena-style `pulse` path). Prefer
+   `SwellPulse` — it's the real §9.1 contract and it's what Phase 2 needs
+   anyway, so building the converter once against the real shape avoids a
+   second rewrite.
+3. Swap it in — either alongside or in place of one of `swellSources.ts`'s
+   five invented decorative storms — and render the existing "+3 Days"
+   comparison frame used throughout rounds 14-17.
+4. Judge, don't just gate: does it stay calm and legible per §5.1, or does
+   real per-cell noise (period drifting several seconds within a day —
+   documented in `phase-1-validation/README.md`'s "What the real clean-window
+   data actually showed") read as flicker or chaos against the current
+   floored-decay model? If it breaks down, that's the finding — it means the
+   art-direction layer needs adjustment before real data can be trusted
+   for good, per §8's Phase 2 instruction ("confirm the engine still looks
+   calm with real, messier data — adjust the art-direction layer, not the
+   underlying data").
+5. Whatever the result, write it up as its own dated entry in this file the
+   same way rounds 1-17 are documented, with the frame(s) it produced. This
+   is a spike, not a phase deliverable — keep it out of `phase-0-prototype/`'s
+   production data path unless the result is good enough to actually replace
+   a decorative source outright.
+
+**Explicitly out of scope for this spike** — these are real Phase 1 and stay
+behind Thread A: a scheduled ingestion job, object storage / CDN, the full
+seven-basin global grid (`global_grid.py` exists and is ready for this, but
+wiring it up is Phase 1 proper), and anything client-facing.
+
+### Lower-priority open items, not blocking either thread
 `MASTER_BUILD_PLAN.md` §12:
-- **Open-Meteo call-volume budget** (§4.1): the ~463K calls/month estimate
-  above is derived from a search-summarized pricing formula, not verified
-  directly against Open-Meteo's pricing page (still blocked from this
-  sandbox). Worth a direct check once real network access exists, before
-  Phase 5 (the first paid feature) ships.
-- **Brand name** (§12.1): still deferred, correctly — nothing here
-  changes that.
+- **Open-Meteo call-volume budget** (§4.1): the ~463K calls/month estimate is
+  derived from a search-summarized pricing formula, not verified directly
+  against Open-Meteo's pricing page (still blocked from this sandbox — same
+  network policy as above). Worth a direct check once real network access
+  exists, before Phase 5 (the first paid feature) ships.
+- **Brand name** (§12.1): still deferred, correctly — nothing here changes
+  that.
 - **Print fulfillment partner** (§12.3): still unselected, correctly, this
   far out.
 
-**Loose threads from the validation work itself**, worth knowing about but
-not blocking Phase 0:
+**Loose threads from the Phase −1 validation work itself**, worth knowing
+about but not blocking either thread above:
+
 - The messy window (Sep 8-21, 2025) was picked as a generic shoulder-season
   fortnight and was never independently cross-checked against the raw
   significant wave height the way the plan itself recommends — it happens

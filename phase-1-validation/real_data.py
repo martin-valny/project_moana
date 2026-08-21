@@ -53,7 +53,7 @@ def load_raw_to_frames(path, step_hours=6, min_height_m=0.1):
                     "swell_period": p,
                     "direction_from": d % 360,
                     "energy": round(h ** 2 * p, 3),
-                    "category": "groundswell" if p >= 12.0 else "wind_sea",
+                    "category": "groundswell" if p >= 11.0 else "wind_sea",
                 })
 
             if records:

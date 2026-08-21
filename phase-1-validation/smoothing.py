@@ -51,7 +51,7 @@ def smooth_frames(frames, window=3, min_samples=2):
                 "swell_period": round(period, 2),
                 "direction_from": round(direction, 1),
                 "energy": round(energy, 3),
-                "category": "groundswell" if period >= 12.0 else "wind_sea",
+                "category": "groundswell" if period >= 11.0 else "wind_sea",
             }
         smoothed_frames.append({"t": frame["t"], "hours": frame["hours"], "cells": new_cells})
     return smoothed_frames
