@@ -2755,6 +2755,94 @@ been put on the actual globe and screenshotted (round "11."). The other four
 are QC'd numerically here (`qc-real-pulses.mjs`) but not yet rendered and
 judged by eye the way §5.1 ultimately requires.
 
+### 13. A real, pre-existing bug: the far end of the scrubber washes out white
+
+**Found by the user, live, on their own machine** — they installed Node,
+ran the app locally, and reported: dragging the timeline glitches, and
+swells render badly or vanish once they stop. Reproduced directly (dragged
+the actual running app in a headless browser, screenshotted through the
+drag and after release) rather than guessed at from the report alone.
+
+**Isolated first, before touching anything:** reverted `swellSources.ts`
+and `interpolate.ts` to their exact pre-round-"11." content (the original,
+Boreas-only, no-real-track build) and dragged to the same spot. **Identical
+blowout.** This is not a real-data regression — it is a latent bug in the
+Phase 0 prototype itself, present since whenever the packet model last
+changed shape, that nothing had ever looked at.
+
+**Why nothing caught it:** the automated screenshot tooling every round
+from 1 through 17 checked (`timeline-shots.mjs`, `shot.mjs`) only ever
+captures four fixed stops — `-18h`, `Now`, `Tomorrow`, `3 Days` (+72h) —
+never the far quarter of the scrubber toward its actual max, `+96h`. The
+one harness that *does* sample that far (`field-metrics.mjs`'s CPU model,
+`AGES`/`SCRUB_HOURS` both reach 96) was passing the whole time — M8b's own
+worst-case clip at 96h measured 0.930%, under its 1.5% ceiling — because
+0.930% of the *full sphere* is still a visually obvious white patch on the
+half that's actually on screen, and the metric had never been eyeballed
+against a real screenshot at that specific age to notice it looked worse
+than the number suggested.
+
+**Root cause, found by reading `swellField.ts` end to end rather than
+guessing from the render:** `packetFromFront`'s band `width` has a floor
+(`MIN_BAND_WIDTH_RAD`, so a freshly-spawned packet isn't a useless sliver)
+but no ceiling — `width = rLead * relativeWidth` grows forever as a source
+ages. A band's own *brightness* is self-limiting (`packetAttenuation`'s
+`stretch` term decays toward `ATTEN_FLOOR` as width grows, by design), but
+its *footprint* is not — an ever-widening ring keeps covering more of the
+globe even after its own brightness has already floored out. With
+`MAX_SWELL_SOURCES` (6) sources all doing this independently, several
+eventually overlap across a shared region near the scrubber's far end, and
+`fieldAt`'s energy is a true *sum* across sources — so a shared region with
+several floored-but-wide bands overlapping still sums past the clip
+threshold. Measured directly: "any energy" coverage of the globe jumps from
+32% at 72h to 52% at 96h, nearly doubling in the scrubber's last quarter —
+exactly the "width keeps growing, so does overlap" mechanism, not a
+coincidence.
+
+**Fix:** `MAX_BAND_WIDTH_RAD = 0.35` (`swellField.ts`), the missing ceiling
+next to the existing floor, applied in the one shared `packetFromFront`
+both Cg-driven invented sources and pulse-driven sources (Helena, the real
+track) route through. `0.35` rad is not arbitrary: the CPU model's own
+natural width at 72h — the last age every prior round actually verified —
+is 0.349 rad, just under it, so everything already measured and gated
+through "3 Days" is numerically unchanged; only the previously-untested
+tail beyond it, where the bug lives, is constrained.
+
+**Verified, before and after, not assumed:**
+
+| | 72h (unchanged range) | 96h (the bug's range) |
+|---|---|---|
+| M8b worst clip | — | 0.930% → **0.427%** (threshold 1.5%) |
+| M9 "strong" (≥0.35) coverage | — | 14.4% → **8.3%** (threshold 22%) |
+| Near-white pixels, actual screenshot | — | 1.03% → **0.40%** of frame |
+
+`npm run build` / `npm run lint` clean. `field-metrics.mjs` (CPU, Stage A):
+5/5 gates still pass, all other ages' numbers unchanged (the whole point of
+picking 0.35 against the 72h figure). `smoke-test.mjs` (both viewports),
+`panel-glass-test.mjs`, `rotate-test.mjs`, and `qc-real-pulses.mjs` (all
+five real pulses) all still pass. No GLSL change needed and no parity risk:
+`packetFromFront` is CPU-only — it produces the `rLead`/`rTrail` numbers
+that get uploaded as uniforms, the shader never recomputes it, so the same
+function backs both the CPU model and the actual render already, before
+and after this fix.
+
+**Not fully eliminated, said plainly:** the 96h frame still shows a
+visibly brighter patch than 72h's — 0.40% near-white and 8.3% "strong"
+coverage is a large improvement, not zero. Two real options if it needs to
+go further: lower `MAX_BAND_WIDTH_RAD` more (trades some of the mature-band
+softness the reference wants), or add a genuine fade-out for very old
+sources rather than just `ATTEN_FLOOR`'s permanent floor (a bigger change,
+touches the "why doesn't anything ever disappear" decision from round 14).
+Neither attempted here — the fix stops at what the measured regression
+needed.
+
+**Also true, and worth saying:** this bug sat in the prototype through
+sixteen rounds of visual tuning and every metrics gate passing, and the
+thing that actually found it was a person dragging the real app on their
+own machine. The automated harnesses check specific, named states; they do
+not check the whole reachable state space, and the timeline's own far end
+was outside what any of them looked at.
+
 ---
 
 ## What's next
@@ -2805,6 +2893,19 @@ all five real windows (see "12."):**
    that round explicitly did *not* do: render the other four on the actual
    globe and judge them by eye the way Mullaghmore was in "11." — only the
    numeric properties are checked for those four, not the look.
+4. `MAX_BAND_WIDTH_RAD` (round "13.") reduces the far-scrubber washout,
+   doesn't eliminate it — 96h is still visibly brighter than 72h. Revisit
+   if the §8 gate (or just further eyeballing) says it's still not calm
+   enough; round "13." lists the two real options (tighter width cap, or a
+   genuine old-age fade) and deliberately didn't pick between them.
+
+**Coverage gap round "13." exposed, worth fixing on its own:**
+`timeline-shots.mjs`'s `STOPS` (`-18h`, `Now`, `Tomorrow`, `3 Days`) never
+reaches the scrubber's actual far end (`+96h`) — every round's visual
+verification through 17 rounds had a blind spot there, which is exactly
+where round "13."'s bug lived. Worth adding a `+96h` (or similarly-named)
+stop so future rounds' routine screenshots cover the whole reachable range,
+not just the four hand-picked ones.
 
 ### Lower-priority open items, not blocking either thread
 `MASTER_BUILD_PLAN.md` §12:

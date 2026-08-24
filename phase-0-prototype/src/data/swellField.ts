@@ -80,6 +80,32 @@ export const PERIOD_TRAIL_S = -3.5;
 export const MIN_BAND_WIDTH_RAD = 0.12;
 
 /**
+ * Ceiling on the band's angular width — the fix for the far-scrubber
+ * washout bug, found by actually dragging the timeline live rather than
+ * relying on the fixed -18h/Now/Tomorrow/3-Days stops every automated
+ * screenshot check uses (`timeline-shots.mjs`, `shot.mjs`). Width grows
+ * unboundedly with age (`width = rLead * relativeWidth`, no ceiling to
+ * match the floor above) — self-limiting for any *one* band's own
+ * brightness (`packetAttenuation`'s `stretch` term already decays toward
+ * `ATTEN_FLOOR` as width grows) but not for its *footprint*: a fixed
+ * angular width at radius `rLead` covers close to its maximum possible
+ * area once `rLead` nears `HALF_PI` (`packetAttenuation`'s own lateral
+ * `sin` term caps out there), so an ever-widening band keeps covering more
+ * of the globe even after its own brightness has already floored out.
+ * With `MAX_SWELL_SOURCES` invented sources all growing this way at once,
+ * several eventually overlap across a shared region, and `fieldAt`'s true
+ * energy *sum* across sources clips that whole shared region to white —
+ * measured directly: "any energy" coverage jumps from 32% of the globe at
+ * 72h to 52% at 96h, nearly doubling in the scrubber's last quarter.
+ *
+ * 0.35 rad (~20 deg) is picked to hold everything already measured and
+ * gated through 72h unchanged — the CPU model's own natural width at 72h
+ * is 0.349 rad, just under this ceiling — and only constrain the
+ * previously-untested tail beyond it, where the bug actually lives.
+ */
+export const MAX_BAND_WIDTH_RAD = 0.35;
+
+/**
  * How far ahead of the leading edge the cutoff feathers out, **as a fraction
  * of band width** rather than an absolute angle.
  *
@@ -200,7 +226,7 @@ export interface Packet {
   rLead: number;
   /** Angular radius of the slowest (trailing) component, radians. */
   rTrail: number;
-  /** `rLead - rTrail`, floored at `MIN_BAND_WIDTH_RAD`. */
+  /** `rLead - rTrail`, clamped to `[MIN_BAND_WIDTH_RAD, MAX_BAND_WIDTH_RAD]`. */
   width: number;
 }
 
@@ -231,13 +257,13 @@ export function angularDistanceRad(periodS: number, hours: number): number {
  * she travels at `Cg`.
  *
  * `rLead` is authoritative and `rTrail` is derived by subtracting a width,
- * never the reverse — so the width floor can never push the trailing edge
- * past the leading one, and the front (the thing the eye reads as "where is
- * it now") is never perturbed by the floor.
+ * never the reverse — so the width floor/ceiling can never push the
+ * trailing edge past the leading one, and the front (the thing the eye
+ * reads as "where is it now") is never perturbed by either clamp.
  */
 export function packetFromFront(rLead: number, periodS: number): Packet {
   const relativeWidth = (PERIOD_LEAD_S - PERIOD_TRAIL_S) / Math.max(periodS + PERIOD_LEAD_S, 0.1);
-  const width = Math.max(rLead * relativeWidth, MIN_BAND_WIDTH_RAD);
+  const width = Math.min(Math.max(rLead * relativeWidth, MIN_BAND_WIDTH_RAD), MAX_BAND_WIDTH_RAD);
   return { rLead, rTrail: rLead - width, width };
 }
 
