@@ -4,7 +4,8 @@ import * as THREE from 'three';
 import { SIMPLEX_NOISE_GLSL } from './shaders/noise';
 import { FBM_GLSL } from './shaders/fbm';
 import { MAX_SWELL_SOURCES, buildSwellSources, resolveSwellSources } from '../data/swellSources';
-import { SWELL_FIELD_GLSL } from '../data/swellField';
+import { SWELL_FIELD_GLSL, type Vec3 } from '../data/swellField';
+import { ATLAS_WIDTH, atlasHeight, buildIsLand, buildOcclusionAtlas } from './landOcclusion';
 import {
   PERIOD_HUE_MAX_S,
   PERIOD_HUE_MIN_S,
@@ -61,6 +62,23 @@ const SURFACE_FRAGMENT = /* glsl */ `
   uniform float uSourceRTrail[MAX_SOURCES]; // trailing edge, radians
   uniform float uSourceAmp[MAX_SOURCES];    // energy x spawn ramp x packet attenuation
   uniform float uSourcePeriod[MAX_SOURCES]; // seconds — drives hue and filament anisotropy
+
+  // Land shadowing (landOcclusion.ts): how much of each source's swell
+  // reaches a given point, given how much contiguous land sits between
+  // them. One packed atlas, not one texture per source: a
+  // sampler2D[MAX_SOURCES] indexed by the loop variable was tried first
+  // and never even rendered — this GLSL profile only allows *constant*
+  // sampler-array indices ("array index for samplers must be constant
+  // integral expressions"). The atlas stacks sources in padded vertical
+  // bands instead (see landOcclusion.ts's module comment for the padding),
+  // so only a single sampler with a computed V coordinate is needed.
+  uniform sampler2D uOcclusionAtlas;
+  // Mirrors landOcclusion.ts's ATLAS_HEIGHT_PER_SOURCE/PAD/sampleBandV —
+  // kept as literals here the same way MAX_SOURCES above mirrors
+  // MAX_SWELL_SOURCES, since GLSL can't import the JS constants directly.
+  const float OCCLUSION_HEIGHT_PER_SOURCE = 64.0;
+  const float OCCLUSION_PAD = 2.0;
+  const float OCCLUSION_BAND_HEIGHT = OCCLUSION_HEIGHT_PER_SOURCE + 2.0 * OCCLUSION_PAD;
 
   /** Hours the scrubber is showing, so filaments advect with the scrub. */
   uniform float uScrubHours;
@@ -228,6 +246,15 @@ const SURFACE_FRAGMENT = /* glsl */ `
         float jitterScale = min(bandWidth * 0.55, uSourceRLead[i] * 0.18);
         float dJittered = d + edgeJitter * jitterScale;
         float w = moanaSourceWeight(S, D, vPos, uSourceRLead[i], uSourceRTrail[i], uSourceAmp[i], dJittered);
+        // Land shadowing — see the uOcclusionAtlas declaration above. uv is
+        // this fragment's own equirectangular coordinate (posToUv(vPos)),
+        // shared by every source since it depends only on where THIS pixel
+        // is, not which source is being evaluated; occV picks out source
+        // i's padded band within the shared atlas (landOcclusion.ts's
+        // sampleBandV, mirrored here since GLSL can't call it directly).
+        float occRowInBand = OCCLUSION_PAD + uv.y * OCCLUSION_HEIGHT_PER_SOURCE;
+        float occV = (float(i) * OCCLUSION_BAND_HEIGHT + occRowInBand) / (OCCLUSION_BAND_HEIGHT * float(uSourceCount));
+        w *= texture2D(uOcclusionAtlas, vec2(uv.x, occV)).r;
         float poleFade = smoothstep(0.0, MOANA_FLOW_POLE, d);
         // The hairy-ball singularity, still real and still handled inside
         // moanaSpread/moanaFlow: "bearing away from a point on a sphere"
@@ -588,6 +615,12 @@ interface GlobeSphereProps {
   selectedIndex: number;
   /** Called with the tapped point as a unit vector, for Globe.tsx to resolve to a source. */
   onPick?: (unit: THREE.Vector3) => void;
+  /** Reports the land sampler once the mask image is decoded, so Globe.tsx's
+   * hit-testing can apply the same land shadowing the shader renders —
+   * otherwise tapping a spot the shader now (correctly) shows as shadowed
+   * could still select a source that reads as strongest there by the old,
+   * land-blind math. See landOcclusion.ts. */
+  onLandReady?: (isLand: (p: Vec3) => boolean) => void;
   octaves?: number;
 }
 
@@ -603,7 +636,16 @@ interface GlobeSphereProps {
  * (short version: one direction for the whole planet is what "the ocean
  * looks smeared" was describing).
  */
-export function GlobeSphere({ radius, pulse, startTime, offsetHours, selectedIndex, onPick, octaves = 5 }: GlobeSphereProps) {
+export function GlobeSphere({
+  radius,
+  pulse,
+  startTime,
+  offsetHours,
+  selectedIndex,
+  onPick,
+  onLandReady,
+  octaves = 5,
+}: GlobeSphereProps) {
   // Round 7: a real (Natural-Earth-derived) land/ocean mask replaces the
   // earlier hand-rolled scanline-fill one — see public/textures/SOURCES.md.
   const landMask = useLoader(THREE.TextureLoader, '/textures/earth-water.png');
@@ -628,6 +670,39 @@ export function GlobeSphere({ radius, pulse, startTime, offsetHours, selectedInd
   // identity is stable for the session (App.tsx builds it once from a fixed
   // startTime), so this only needs to recompute if that identity changes.
   const sources = useMemo(() => buildSwellSources(pulse), [pulse]);
+
+  // Land shadowing (landOcclusion.ts, round "15."): decoded once from the
+  // same mask image already loaded above, and reported up so Globe.tsx's
+  // hit-testing can apply the identical occlusion the shader renders.
+  const isLand = useMemo(
+    () => buildIsLand(landMask.image as CanvasImageSource, landMask.image.width, landMask.image.height),
+    [landMask],
+  );
+  useEffect(() => {
+    onLandReady?.(isLand);
+  }, [isLand, onLandReady]);
+
+  // Baked once per (sources, isLand) pair — every source's origin is fixed
+  // for the session, so this never needs to run again after the first time.
+  // One packed atlas, LinearFilter-safe via the padding baked into it — see
+  // landOcclusion.ts's module comment for the full architecture history.
+  const occlusionTexture = useMemo(() => {
+    const atlas = buildOcclusionAtlas(sources, isLand);
+    const tex = new THREE.DataTexture(
+      atlas,
+      ATLAS_WIDTH,
+      atlasHeight(sources.length),
+      THREE.RGBAFormat,
+      THREE.UnsignedByteType,
+    );
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    return tex;
+  }, [sources, isLand]);
 
   // Fixed-length arrays for the shader's uniform arrays: unused slots (if
   // fewer than MAX_SWELL_SOURCES sources exist) get zero energy below, so
@@ -666,6 +741,7 @@ export function GlobeSphere({ radius, pulse, startTime, offsetHours, selectedInd
     () => ({
       uLandMask: { value: landMask },
       uNightTexture: { value: nightTexture },
+      uOcclusionAtlas: { value: occlusionTexture },
       uTime: { value: 0 },
       uSourceCount: { value: sources.length },
       uSourceOrigin: { value: originArray },
@@ -747,7 +823,20 @@ export function GlobeSphere({ radius, pulse, startTime, offsetHours, selectedInd
     material.uniforms.uScrubHours.value = offsetHours;
     material.uniforms.uSelected.value = selectedIndex;
     material.uniforms.uOctaves.value = octaves;
-  }, [sources, originArray, dirArray, rLeadArray, rTrailArray, ampArray, periodArray, offsetHours, selectedIndex, octaves]);
+    material.uniforms.uOcclusionAtlas.value = occlusionTexture;
+  }, [
+    sources,
+    originArray,
+    dirArray,
+    rLeadArray,
+    rTrailArray,
+    ampArray,
+    periodArray,
+    offsetHours,
+    selectedIndex,
+    octaves,
+    occlusionTexture,
+  ]);
 
   // Selection: unproject the tap to a point on the unit sphere and hand it
   // up. Globe.tsx does the argmax against the same resolved states this

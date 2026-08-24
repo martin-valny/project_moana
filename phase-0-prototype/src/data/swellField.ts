@@ -346,6 +346,65 @@ function normalize3(v: Vec3): Vec3 {
   return l > 1e-9 ? [v[0] / l, v[1] / l, v[2] / l] : [0, 0, 1];
 }
 
+/** Spherical linear interpolation between two unit vectors, t in [0,1]. */
+function slerpUnit(a: Vec3, b: Vec3, t: number): Vec3 {
+  const cosOmega = Math.max(-1, Math.min(1, dot3(a, b)));
+  const omega = Math.acos(cosOmega);
+  if (omega < 1e-6) return a;
+  const sinOmega = Math.sin(omega);
+  const wa = Math.sin((1 - t) * omega) / sinOmega;
+  const wb = Math.sin(t * omega) / sinOmega;
+  return [a[0] * wa + b[0] * wb, a[1] * wa + b[1] * wb, a[2] * wa + b[2] * wb];
+}
+
+/**
+ * How much contiguous land it takes to substantially block a swell,
+ * expressed as an angular length (radians of great-circle arc) — a
+ * "blocking distance" rather than a hard yes/no, matching the physical
+ * request behind this: a real storm's energy doesn't reach a real
+ * shadow-zone coast, but it *does* diffract around a small island and
+ * mostly refill just behind it, per real coastal-engineering wave
+ * diffraction (Huygens' principle for waves meeting a small obstacle).
+ * 0.05 rad is ~320km at Earth's radius — a small island's land-crossing
+ * (tens of km) barely dents transmission; a real continent's crossing
+ * (many hundreds to thousands of km) drives it to ~0.
+ */
+export const LAND_BLOCK_SCALE_RAD = 0.05;
+
+/** How many points along a source-to-point path to sample for land. */
+export const OCCLUSION_SAMPLES = 24;
+
+/**
+ * Fraction of a swell's energy that reaches `point` from `origin`, given
+ * `isLand` — anything from 1 (clear path, no attenuation) down toward 0
+ * (path crosses enough contiguous land to be fully shadowed).
+ *
+ * Deliberately dependency-free like the rest of this module: `isLand` is
+ * injected rather than reading a texture directly, so this same function
+ * serves the browser (real land-mask pixels, see `landOcclusion.ts`) and
+ * is still testable with a synthetic `isLand` under Node, without this
+ * module knowing anything about images or WebGL.
+ *
+ * Sampled at `OCCLUSION_SAMPLES` points strictly *between* origin and
+ * point (excluding both endpoints) — a source whose own origin sits on a
+ * coastline, or a point that happens to land exactly on a small island,
+ * should not make the whole path read as blocked because of the endpoint
+ * itself.
+ */
+export function pathOcclusion(origin: Vec3, point: Vec3, isLand: (p: Vec3) => boolean): number {
+  const d = Math.acos(Math.max(-1, Math.min(1, dot3(origin, point))));
+  if (d < 1e-6) return 1;
+
+  let landSamples = 0;
+  for (let i = 1; i <= OCCLUSION_SAMPLES; i++) {
+    const t = i / (OCCLUSION_SAMPLES + 1);
+    if (isLand(slerpUnit(origin, point, t))) landSamples++;
+  }
+
+  const landAngularLength = d * (landSamples / OCCLUSION_SAMPLES);
+  return Math.exp(-landAngularLength / LAND_BLOCK_SCALE_RAD);
+}
+
 export function smoothstep(edge0: number, edge1: number, x: number): number {
   const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
   return t * t * (3 - 2 * t);

@@ -2934,6 +2934,125 @@ actually ran); the fix was then re-verified against `npm run preview` too
 itself lives in `useDampedValue.ts`'s math — it does not depend on which
 build serves the code.
 
+### 15. Swells were reading straight through continents — no land-awareness at all
+
+**Reported by the user, watching the animation:** "swell kinda continue
+'under' continents and then just reappear on the other side... like if
+they somehow continue traveling under it." Checking the shader confirmed it
+exactly: the packet weight (`moanaSourceWeight`, `swellField.ts`) is pure
+spherical geometry — angular distance from a source's origin — with the
+land mask used only to recolour a fragment, never consulted when deciding
+how much swell reaches it. A source on one side of a continent and a point
+on the other are just two points at some angular separation; nothing in the
+model knew there was a landmass between them.
+
+**Design, put to the user rather than assumed:** offered three
+implementation shapes (per-frame raycast, precomputed per-source visibility,
+a cheap midpoint check); the user's own reply reframed the *physics*
+question first — "swell that hits large land mass disappear, swell that
+hits some smaller island bend somehow, weakens?" — real coastal behaviour
+(shadowing vs. diffraction), not a rendering trick. Agreed and proposed a
+single continuous mechanism that produces both ends of that spectrum for
+free rather than two special cases: attenuate a source's reach at a point by
+how much *contiguous land* the great-circle path between them crosses — a
+short land crossing (a small island) barely attenuates, a long one (a
+continent) attenuates to nearly nothing, with no separate "island" vs.
+"continent" branch anywhere. The user's answer to the resulting question was
+"yes."
+
+**The physics (`swellField.ts`, shared CPU/GPU code — same file every other
+round's packet math lives in, for the same reason: shader and hit-testing
+must agree, not reimplement).** `pathOcclusion(origin, point, isLand)`
+samples `OCCLUSION_SAMPLES` (24) points along the great-circle arc between
+origin and point (`slerpUnit`, excluding both endpoints), counts what
+fraction read as land, converts that fraction of the full angular distance
+into a land-crossing arc length, and returns
+`exp(-landAngularLength / LAND_BLOCK_SCALE_RAD)` with `LAND_BLOCK_SCALE_RAD
+= 0.05` rad (~320 km) — an exponential, so a sliver of coastline knocks off
+a little, a real continent knocks off effectively all of it, with one
+tunable constant rather than a threshold to tune per case.
+
+**Why precomputed, not per-frame:** every source's origin is fixed for the
+whole session (`buildSwellSources` never moves one), so "how shadowed is
+this point on the globe, from this source" never changes after the sources
+are built. Baking it once into a texture the shader samples is the same
+answer as calling `pathOcclusion` per-fragment per-source every frame, at a
+fraction of the cost.
+
+**Three architecture attempts before one actually worked — kept here
+honestly, per this file's own convention, because the dead ends are the
+part someone picking this up cold would otherwise redo:**
+
+1. **One packed atlas, `NearestFilter`, 180×90 texels/source (2°/texel).**
+   Worked, rendered, no crash — but visibly blocky: a staircase along every
+   coastline. `NearestFilter` was load-bearing here to stop `LinearFilter`
+   blending a source's band into its neighbour's when packed edge-to-edge
+   in one texture. Doubling resolution to 360×180 made the steps finer, not
+   smooth — confirms it was a filtering problem, not a resolution one.
+2. **One `sampler2D` per source, real `LinearFilter`, no packing.** The
+   filtering fix, but it needs `uniform sampler2D uOcclusion[MAX_SOURCES]`
+   indexed by the swell loop's own loop variable — and this GLSL profile
+   rejected it outright: "array index for samplers must be constant
+   integral expressions," the moment it hit a real browser (cascading into
+   "useProgram: program not valid" / a framebuffer feedback-loop warning as
+   symptoms of the invalid program, not causes). Dynamic sampler-array
+   indexing is a hard constraint of this environment, not something to try
+   harder against.
+3. **One packed atlas again, but padded (shipped).** Each source gets a
+   `PAD = 2`-row margin of duplicated edge data above and below its true
+   `ATLAS_HEIGHT_PER_SOURCE = 64` rows (`landOcclusion.ts`'s
+   `buildOcclusionAtlas`). `LinearFilter` samples at most one texel either
+   side of the exact coordinate, so at a band's true top/bottom edge it now
+   blends with a *copy of its own* edge value instead of a different
+   source's data — smooth interpolation, no cross-source bleed, a single
+   `sampler2D` (`uOcclusionAtlas`), no dynamic indexing anywhere. The
+   shader computes each source's padded V coordinate inline
+   (`OCCLUSION_HEIGHT_PER_SOURCE`/`OCCLUSION_PAD`/`OCCLUSION_BAND_HEIGHT`,
+   literals mirroring `landOcclusion.ts`'s constants the same way
+   `MAX_SOURCES` already mirrors `MAX_SWELL_SOURCES` in this file) —
+   `landOcclusion.ts` also exports `atlasHeight(sourceCount)` so the JS
+   side building the `THREE.DataTexture` can't drift out of sync with the
+   padding baked into the atlas it sizes.
+
+**A real crash along the way, and an instructive false fix.** Wiring
+`isLand` (built once per land-mask image, in `GlobeSphere.tsx`) up to
+`Globe.tsx`'s hit-testing via `onLandReady={setIsLand}` crashed instantly:
+`TypeError: Cannot read properties of null (reading '1')` inside `isLand`
+itself. First guess was a `THREE.RedFormat`/software-renderer
+incompatibility and switching to `RGBAFormat` — didn't fix it, same crash,
+a red herring. The dev-mode stack trace pointed at React's own
+`basicStateReducer`: passing a function (`isLand`) directly to a `useState`
+setter is interpreted as a *functional updater* — React called
+`isLand(prevState)`, i.e. `isLand(null)`, hence `null[1]`. Fixed by
+`onLandReady={(fn) => setIsLand(() => fn)}`, so the setter receives a
+function that *returns* `isLand` rather than being called with it.
+`Globe.tsx`'s `handlePick` now multiplies `sourceWeightAt` by the same
+`pathOcclusion` the shader applies, so tap and render can't disagree the
+way earlier rounds' hit-testing and shading already don't.
+
+**Verified.** `npm run build` / `npm run lint` clean. Screenshotted against
+`npm run preview` at the "3 Days" stop, then again after a large camera
+drag: a bright swell ribbon now visibly truncates at a continent's
+coastline instead of continuing across it, with no staircase or blockiness
+along the edge and no console errors, shader-compile failures, or context
+loss. `field-metrics.mjs --cpu` (5/5), `parity-probe.mjs` (both gates),
+`qc-real-pulses.mjs` (all five real windows), `smoke-test.mjs`,
+`panel-glass-test.mjs`, and `rotate-test.mjs` all still pass — none of them
+exercise land occlusion directly (it lives entirely in the shader and
+`Globe.tsx`'s hit-testing, neither of which the CPU-only harnesses touch),
+so this is confirming no regression, not new coverage of this feature.
+
+**Not fully solved:** there is no automated check that the GLSL band-V
+math in `GlobeSphere.tsx` still matches `landOcclusion.ts`'s
+`sampleBandV`/`atlasHeight` — verified by reading both side by side at
+implementation time, the same way `MAX_SOURCES` mirroring
+`MAX_SWELL_SOURCES` has always been eyeballed rather than gated. Given this
+project's own recurring bug shape (two places holding one fact), a
+`parity-probe.mjs`-style check comparing `pathOcclusion` output against a
+sampled texel from the actual built atlas would close that gap properly;
+not done here since it needs the atlas plus a CPU decode of a padded band,
+which is more scaffolding than this round's fix needed.
+
 ---
 
 ## What's next
@@ -2942,6 +3061,10 @@ build serves the code.
 other.** Thread A is the §8 human gate, unchanged from before and still
 needing the user. Thread B — the ingestion spike and its fix — is now done
 (see "10." and "11." above); what's left is a narrower harness follow-up.
+Land occlusion (see "15.") is a real bug the user found while exercising
+Thread B's real data, now fixed and verified, with one open follow-up: a
+parity check between the shader's atlas sampling and `pathOcclusion` (see
+"15."'s "Not fully solved").
 
 ### Thread A — the §8 gate (unchanged, still needs the user)
 
