@@ -2843,6 +2843,97 @@ own machine. The automated harnesses check specific, named states; they do
 not check the whole reachable state space, and the timeline's own far end
 was outside what any of them looked at.
 
+### 14. A second bug round "13." didn't touch: the scrubber itself could diverge
+
+**Round "13." fixed a real bug, but it wasn't the one the user kept hitting
+after pulling it.** They reported it again, worse, triggered by the
+slightest drag near the timeline's *start* this time, not the far end —
+"it kinda storms through and swell disappears." Reproduced directly again
+(dragging the running dev server, not the production preview build round
+"13." was verified against — a real gap in how that round was tested,
+closed here by testing dev mode too), and this time the disappearance
+didn't recover: even returning the scrubber to "Now" left the ocean
+featureless.
+
+**Root cause, found by instrumenting the actual value rather than guessing
+from screenshots:** exposed `offsetHours` (the raw pointer target) and
+`scrubHours` (`useDampedValue`'s critically-damped follow of it,
+`useDampedValue.ts`) side by side during a drag. `offsetHours` stayed sane
+throughout. `scrubHours` did not — it reached **-103,339** within four real
+frames of a small, slow drag, then kept diverging on repeat runs into the
+billions. Every source resolves *its* `offsetHours` from this value, so a
+diverged `scrubHours` reads as every swell being an astronomical distance
+from anything real — i.e. gone — and stays gone, because a corrupted spring
+restarted from that state doesn't recover in four frames either.
+
+Logging every physics step pinned it to two independent problems, not one:
+
+1. **The animation loop was torn down and rebuilt on every `target`
+   change.** `useDampedValue`'s `requestAnimationFrame` loop lived inside a
+   `useEffect` with `target` in its own dependency array — looked harmless
+   (`step` already reads the current value through a ref, not a captured
+   `target`), but a drag fires many pointermove events per second, and each
+   one cancelled the in-flight frame and rescheduled a fresh one.
+2. **The integrator is numerically unstable at its own documented worst
+   case.** Semi-implicit Euler on this critically-damped spring
+   (`frequencyHz = 5`, so `omega ≈ 31.4`) is only stable while
+   `omega * dt` stays under ~0.83 — checked by computing the discrete
+   update matrix's eigenvalues directly: `dt = 1/30` (the step's own
+   existing ceiling, added so a backgrounded tab returning after seconds
+   wouldn't integrate one huge step) has a max eigenvalue of **1.80**
+   (unconditionally diverging); `dt = 1/60` has **0.74** (stable). One
+   frame at the clamped ceiling barely nudges the value; several
+   *consecutive* ones — which repeatedly restarting the loop (problem 1)
+   reliably produces, and which this project's own software-rendered
+   sandbox produces on nearly every frame regardless — compound into
+   exactly the divergence measured.
+
+**Fixed both, separately, because they're different failures:**
+
+1. `startLoop` (`useDampedValue.ts`) is now a stable function, a no-op
+   whenever a loop is already running (`rafIdRef` doubles as "is one
+   scheduled" and the id to cancel) — calling it once per pointermove still
+   happens, but costs one guard check instead of a teardown/rebuild.
+   (First version of this half introduced its own bug, caught before
+   commit: the unmount-cleanup effect cancelled the frame but didn't reset
+   `rafIdRef` to 0, which is invisible in a production build but freezes
+   the loop *permanently* under React StrictMode's dev-only double-invoke —
+   `offsetHours` kept updating, `scrubHours` never moved again. Fixed by
+   resetting the ref in the same cleanup that cancels the frame.)
+2. `step` now **sub-steps** rather than clamping-and-taking-one-step: a
+   frame whose real elapsed time exceeds `MAX_STABLE_DT` (`1/60`, with real
+   margin under the ~0.83 line for this hook's `omega`) is integrated as
+   several `MAX_STABLE_DT`-sized steps back to back. This keeps the
+   simulation stable and accurate at *any* real frame rate — 120fps down to
+   the handful of fps this sandbox's software renderer manages — rather
+   than only being correct in the narrow band it happened to be tuned
+   against before. (An intermediate version fixed only the sign of `dt`,
+   clamping it to `>= 0` rather than letting a rare out-of-order frame
+   timestamp run the physics backward — genuinely necessary on its own,
+   kept — but insufficient alone: `dt` clamped to exactly `1/30` is still
+   past the instability line even when it's never negative.)
+
+**Verified:** instrumented re-test (same technique that found it) shows
+`scrubHours` tracking smoothly and staying bounded throughout a drag that
+previously diverged within four frames, and settling cleanly back to the
+target after release. Screenshotted mid-drag and after release — full
+detail both times, no disappearance. `npm run build` / `npm run lint`
+clean. `smoke-test.mjs`, `panel-glass-test.mjs`, `rotate-test.mjs`,
+`field-metrics.mjs` (CPU, 5/5, numbers unchanged from round "13.") and
+`qc-real-pulses.mjs` (all five real pulses) all still pass — this round
+touches only `useDampedValue.ts`, which nothing else in the metrics
+harness exercises.
+
+**Why round "13." missed this:** it was verified against `npm run preview`
+(the production build) exclusively, and its own drag tests happened not to
+hit the unstable regime — a coincidence of which specific frame timings
+that run's synthetic drag produced, not evidence this bug is dev-mode-only.
+This round's own repro work was done against `npm run dev` (what the user
+actually ran); the fix was then re-verified against `npm run preview` too
+(the regression suite above), so both are now covered, but the instability
+itself lives in `useDampedValue.ts`'s math — it does not depend on which
+build serves the code.
+
 ---
 
 ## What's next
