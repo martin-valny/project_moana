@@ -1,14 +1,38 @@
 # Project Moana — Progress Report
 
-Last updated: 2026-08-21, branch `claude/moana-master-build-plan-v2-zjs07y`.
+Last updated: 2026-08-24, branch `claude/swell-landmass-collision-j5f80b`.
 Working tree clean, everything below is pushed.
 
-**The current build is round 17.** Rounds 14 and 15 landed the current visual
+**The current build is round 18.** Rounds 14 and 15 landed the current visual
 model: dispersive packets rather than filled disc sectors, brightness rather
 than hue as the strength signal, no drawn line or marker for Helena, the
 continents behind the water, and a panel glyph that tracks the scrubber.
 Round 17 changed no pixels — it settled the filament question and cleaned up
 after it.
+
+> ### Land shadowing is a shadow model — read this before "tuning" it
+>
+> Rounds "15."-"17." all tried to stop swells crossing continents by walking
+> the source-to-point arc, counting land samples, and attenuating by
+> `exp(-landLength / scale)`. Three rounds tuned that model's constants and
+> the user reported it broken all three times — first swells still crossing
+> Central America, then the whole field rendering as **choppy speckle**.
+>
+> The model was the bug. Its output was a small *integer* count: on a
+> 40-degree path, zero land samples gave 1.0000 and one gave 0.1129, so a
+> single sample landing on an island decided whether a pixel was bright or
+> black, and neighbouring pixels flipped independently (11.2% of adjacent
+> pairs differing by >0.25, jumps up to 0.997). No constant fixes that.
+>
+> Round "18." replaced it: land casts a **shadow**, and only **diffraction**
+> puts energy back into one. Per source, one baked number per bearing (the
+> distance at which that ray first meets land); per fragment, the fraction of
+> the first Fresnel zone that is unobstructed. Small obstacles bend, large
+> ones block, from one mechanism. It cannot speckle by construction — the
+> taps are on fixed bearing centres and only their weights slide.
+>
+> **`land-shadow-metrics.mjs` (Stage L) and `parity-probe.mjs`'s B3 now guard
+> this.** If you are about to change it, run them first and read "18.".
 
 > ### The filament question is closed — read this before "fixing" the shader
 >
@@ -189,12 +213,19 @@ cd phase-0-prototype
 npm install
 npm run build && npm run lint
 node --import ./ts-resolve-hook.mjs --experimental-strip-types field-metrics.mjs --cpu     # Stage A, seconds
+node --import ./ts-resolve-hook.mjs --experimental-strip-types land-shadow-metrics.mjs    # Stage L, ~300ms
 npm run preview -- --port 4173 &
 node --import ./ts-resolve-hook.mjs --experimental-strip-types parity-probe.mjs            # Stage B, ~1s
 node --import ./ts-resolve-hook.mjs --experimental-strip-types field-metrics.mjs --pixels  # Stage C, ~5 min
 node smoke-test.mjs && node panel-glass-test.mjs && node rotate-test.mjs
 node timeline-shots.mjs   # screenshots at every labelled stop, both viewports
 ```
+
+**Stage L is the land-shadow gate** (round "18."): enclosed seas stay dark,
+open ocean is not over-blocked, the field is smooth rather than speckled,
+small obstacles bend where large ones block, and swell still reaches the coast
+it is running at. It needs no renderer either. Run it before and after
+anything that touches `swellField.ts`'s shadow code or `landOcclusion.ts`.
 
 **Do all geometry work in Stage A.** It runs against the TypeScript model with
 no renderer, so an iteration costs milliseconds against the ~60 s a screenshot
@@ -3156,6 +3187,135 @@ than new coverage.
   would remove it from the main thread if that becomes a problem, not done
   here.
 
+### 18. The land-shadow model was wrong in kind, not in tuning — rewritten as a shadow
+
+**Reported by the user after rounds "15."-"17.":** *"in last two rounds we've
+been trying to 'stop' the swell when it hit landmass.. it didn't really work..
+in first attempt swells continue to run under continents.. second attempt kinda
+mess everything up and created somewhat choppy speckles patterns to swells -
+very bad."* Both halves of that were reproduced numerically before anything was
+changed, and both were real.
+
+**What all three previous rounds had in common.** Every one of them modelled
+land the same way: walk the great-circle arc from source to point, count how
+much of it reads as land, attenuate by `exp(-landLength / scale)`. Round "15."
+tuned the sample count, round "16." tuned the sampling step and the decay
+scale, round "17." moved where it was evaluated. Nobody questioned the model,
+and the model was the bug, in two independent ways:
+
+1. **It quantised catastrophically.** The shader summed a small *integer*
+   count of land hits. Measured on a 40-degree path at the shipped 40-sample
+   cap: zero land samples gives transmission 1.0000 and **one gives 0.1129**.
+   So whether a single sample happened to land on an island decided whether a
+   pixel was bright or black — and adjacent pixels made that coin flip
+   independently. Measured in the Caribbean, **11.2% of neighbouring sample
+   pairs differed by more than 0.25, with jumps as large as 0.997.** That is
+   exactly the speckle the user described, and it is inherent to the model:
+   no tuning fixes an output that is a low integer count.
+2. **It undersampled.** That same 40-sample cap spreads samples **108km apart
+   on a 40-degree path** — four times coarser than the 25km land mask it
+   reads, so whole countries fall between samples. Round "16." had fixed this
+   for the CPU (whose cap is 200) but its GLSL mirror kept 40: two places
+   holding one fact, this file's own recurring bug shape, for the fourth time.
+
+**The replacement — a shadow, not an attenuation.** Land casts a *shadow*, and
+the only thing that puts energy back into a shadow is *diffraction around its
+edges*. So, per source, bake one number per bearing — the angular distance at
+which that ray first meets land — and ask, for any point, what fraction of the
+first Fresnel zone around the direct ray is unobstructed. That is the standard
+Fresnel-clearance model for wave shadowing, and it produces both halves of what
+the user asked for in round "15." (*"swell that hits large land mass disappear,
+swell that hits some smaller island bend somehow, weakens?"*) from one
+mechanism, with no island/continent special case. Measured, 1200km downstream:
+an 8km islet transmits 1.000, a 30km island 0.24, Panama's ~70km isthmus 0.05,
+and anything from 150km up 0.000.
+
+**Why per-bearing and not another atlas.** Rounds "15."/"16." baked a lat/lon
+atlas and round "17." deleted it for a per-fragment march, and both framings
+were wrong the same way: they stored the answer on a grid laid over the
+*destination*, where the structure is arbitrarily fine, when the quantity is a
+property of a *ray*. Indexed by bearing, one source's whole shadow is 2048
+floats with the distance along each ray stored as a continuous number — there
+is no destination grid left to be coarser than the geography. The bake is
+**294ms for six sources** against the ~1.4s round "16." measured for its atlas,
+and the render samples 13 texels of a 48KB texture instead of up to 40 of a
+mip-mapped 1600x800 one, so round "17."'s open worry about per-fragment cost is
+answered rather than inherited.
+
+**It cannot speckle by construction.** The taps sit on fixed bearing centres
+and only their Gaussian weights slide with the fragment's position, so
+transmission is a continuous function of where the fragment is. That is a
+property of the shape of the computation, not of a constant that could drift.
+
+**Two things measurement caught that reasoning had got wrong**, both worth
+keeping because both were confidently argued first:
+
+- **Sub-sampling each bearing cell** (so an obstacle narrower than a cell
+  costs less than the whole cell) was built on a clear argument and measured
+  to change the globe's partial-transmission area from 3.376% to 3.326% and
+  the scored error counts not at all, for 4x the bake time. Removed.
+- **An early scoring harness asked "direct ray clear => must be lit"** and
+  reported 414 errors. Inspecting one: its direct ray was clear, but it sat
+  **8.5km from a geometric shadow edge**, where half a Fresnel zone is
+  obstructed and ~0.33 is the correct answer. The criterion ignored the very
+  physics being tested. Rescored by shadow-interior rather than by ray:
+  **the shipped model gets 423 deep-shadow points wrong and the new one 0.**
+
+**A real artifact the screenshot caught and the metrics did not.** The first
+build put hard thin dark lines across the North Atlantic swell — shadows cast
+by islands too small to draw, beginning abruptly at an invisible obstacle with
+blunt square ends. Two attempts to soften them physically (a directional-spread
+term, then a two-pass aperture) both failed, and widening the blur only added
+mush. The structure that fixed it came from measuring rather than arguing:
+Central America blocks a **587-bearing-wide** span of a Pacific source's row,
+against the **one or two bearings** an islet blocks — over two orders of
+magnitude apart. A morphological closing on the row (`SHADOW_CLOSE_BEARINGS`)
+fills valleys narrower than its element while leaving wider ones and every peak
+untouched, so it removes exactly those isolated near-blocks and nothing else,
+cannot weaken a real barrier at that separation, and leaves narrow *straits*
+passing swell through them.
+
+**The CPU/GPU gap both earlier rounds flagged is now closed.** Rounds "15." and
+"17." each wrote a GLSL mirror of the land math, each verified it by reading
+the two side by side, and each wrote down that a real check was the thing worth
+adding. `parity-probe.mjs`'s new **B3** compiles the shipped `SWELL_SHADOW_GLSL`
+against a real 16-bit shadow texture and the real mask and asserts it matches
+the TypeScript at eight points including Panama — worst delta 0.00000. The
+shader and `Globe.tsx`'s hit-testing now read the same baked `Float32Array`, so
+there is one model and one copy of the data.
+
+**New gate: `land-shadow-metrics.mjs`** (Stage L, CPU only, ~300ms) asserts the
+five properties these four rounds were each missing — L1 enclosed seas stay
+dark, L2 open ocean is not over-blocked, L3 the field is smooth not speckled,
+L4 small obstacles bend where large ones block, L5 swell still reaches the
+coast it is running at. It discriminates: on L3's exact scan the shipped
+round-"17." model measures **0.999** against the new model's **0.349** and a
+0.5 threshold.
+
+**Verified.** `npm run build` / `npm run lint` clean. Stage A 5/5; Stage L 5/5;
+parity `B` 0.000999, `B2` 1.0001, `B3` 0.00000; Stage C **8 of 9**;
+`qc-real-pulses.mjs` all five real windows; `smoke-test.mjs` both viewports,
+zero console errors; `panel-glass-test.mjs`, `rotate-test.mjs`. Screenshotted
+before and after from an identical camera (landmark positions projected through
+the app's own `__moanaProject` in both runs, so the frames are comparable): the
+speckled blocks off Central America and in the Caribbean are gone, the Atlantic
+swell stops at West Africa instead of crossing it, and the shadow field
+rendered directly to an equirectangular image shows a clean lit lobe.
+
+**Not fully solved — `M2` fails at 2.44 against its 2.5 threshold, and this
+needs the user's call.** It is not a bug and not a regression in the swell
+itself: `P50` is unchanged at 39 and `M4p`/`M1p` are unmoved (3.27x against a
+3.26x baseline), so the bands have exactly the contrast they had. What dropped
+is `P95`, 106 -> 95, because `M2` averages over *all* ocean pixels and a large
+part of the frame's bright ocean was previously swell that had crossed the
+Americas. The gate's calibration assumed land-blind propagation, so fixing the
+propagation moved it. This file's own instruction for a low `M2` is "more
+contrast in the bands, not a lower threshold" — the levers are `FIELD_GAIN`
+(1.8 now, with real headroom: `M8b` clipping is 0.413% against a 1.5% ceiling
+and `M9` 8.2% against 22%) or the colour ramp. Both are *look* decisions on a
+visual the user has spent seventeen rounds converging on, so neither was taken
+unilaterally. **Do not lower the threshold to make this pass.**
+
 ### 17. Round "16." was still wrong — not the sampling, the destination grid
 
 **Reported again, with a screenshot this time:** "still there look .. the
@@ -3243,8 +3403,10 @@ further use surfaces any frame-rate regression.
 other.** Thread A is the §8 human gate, unchanged from before and still
 needing the user. Thread B — the ingestion spike and its fix — is now done
 (see "10." and "11." above); what's left is a narrower harness follow-up.
-Land occlusion (see "15."-"17.") is a real bug the user found while
-exercising Thread B's real data, and took three rounds to actually close:
+Land occlusion (see "15."-"18.") is a real bug the user found while
+exercising Thread B's real data, and took four rounds to actually close —
+"15."-"17." all tuned one model, and "18." replaced it (read "18." first; the
+three below it are the dead ends it came out of):
 round "15." added the mechanism but sampled too coarsely and used too loose
 a decay scale, round "16." fixed both of those but was still bottlenecked
 by a coarse destination texture atlas, and round "17." removed the atlas

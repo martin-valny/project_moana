@@ -8,7 +8,8 @@ import { GlobeSphere } from './GlobeSphere';
 import { latLonToVector3 } from './geo';
 import { detectQualityTier } from './qualityTier';
 import { buildSwellSources, resolveSwellSources } from '../data/swellSources';
-import { pathOcclusion, sourceWeightAt, type SwellSourceState, type Vec3 } from '../data/swellField';
+import { sourceWeightAt, type SwellSourceState, type Vec3 } from '../data/swellField';
+import type { ShadowMap } from './landOcclusion';
 import type { SwellPulse } from '../data/types';
 
 const RADIUS = 2;
@@ -157,7 +158,7 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
   // Reported by GlobeSphere once the land-mask image is decoded (see
   // landOcclusion.ts) — null until then, which only matters in the window
   // before the globe has rendered its first frame at all.
-  const [isLand, setIsLand] = useState<((p: Vec3) => boolean) | null>(null);
+  const [shadow, setShadow] = useState<ShadowMap | null>(null);
 
   /**
    * Which swell did that tap land on? Argmax of the field's own per-source
@@ -172,7 +173,7 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
       let best = -1;
       let bestWeight = PICK_THRESHOLD;
       states.forEach((s, i) => {
-        const w = sourceWeightAt(s, p) * (isLand ? pathOcclusion(s.origin, p, isLand) : 1);
+        const w = sourceWeightAt(s, p) * (shadow ? shadow.transmissionAt(i, p) : 1);
         if (w > bestWeight) {
           bestWeight = w;
           best = i;
@@ -180,7 +181,7 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
       });
       onSelectSource(best);
     },
-    [states, isLand, onSelectSource],
+    [states, shadow, onSelectSource],
   );
 
   return (
@@ -202,14 +203,12 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
           offsetHours={offsetHours}
           selectedIndex={selectedIndex}
           onPick={handlePick}
-          // NOT `onLandReady={setIsLand}` directly: `isLand` is itself a
-          // function, and React's setState interprets a function argument
-          // as a lazy updater (`fn(prevState)`) rather than the new state
-          // value — confirmed live, it crashed inside `isLand(null)` (prior
-          // state) with "Cannot read properties of null". Wrapping in an
-          // arrow makes the argument a function that *returns* the
-          // function, which is what stores it as-is.
-          onLandReady={(fn) => setIsLand(() => fn)}
+          // An object rather than the bare `isLand` function this used to
+          // pass: React's setState reads a function argument as a lazy
+          // updater (`fn(prevState)`) rather than the new state value, which
+          // crashed live inside `isLand(null)`. Reporting the baked map
+          // sidesteps that shape entirely.
+          onShadowReady={setShadow}
           octaves={quality.octaves}
         />
         {exposeMarker && <MarkerProbe state={states[0]} states={states} />}

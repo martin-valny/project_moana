@@ -351,102 +351,239 @@ function cross3(a: Vec3, b: Vec3): Vec3 {
 }
 
 /**
- * How much contiguous land it takes to substantially block a swell,
- * expressed as an angular length (radians of great-circle arc) — a
- * "blocking distance" rather than a hard yes/no, matching the physical
- * request behind this: a real storm's energy doesn't reach a real
- * shadow-zone coast, but it *does* diffract around a small island and
- * mostly refill just behind it, per real coastal-engineering wave
- * diffraction (Huygens' principle for waves meeting a small obstacle).
+ * ## Land shadowing: why this is a shadow, not an attenuation
  *
- * 0.008 rad is ~51km at Earth's radius. Round "15." shipped this at 0.05
- * rad (~320km) and it was wrong by an order of magnitude in the direction
- * that matters least visibly: measured directly against a real source
- * reaching the Gulf of Mexico through several hundred km of Central
- * America/Mexico, that scale let 21% of the swell's energy leak straight
- * through solid land. 0.008 rad drives a landmass more than ~100km wide to
- * under 5% transmission (reads as "gone") while a feature of a few km to a
- * few tens of km — an atoll, a barrier island — only dents it (round
- * "16.").
+ * Rounds "15."-"17." all modelled this the same way — walk the great-circle
+ * arc from a source to a point, count how much of it reads as land, and
+ * attenuate by `exp(-landLength / scale)`. Three rounds tuned that model and
+ * the user still saw swells crossing Central America; round "17."'s
+ * per-fragment version additionally rendered visible speckle. Measured
+ * against the real mask and the real sources, the model itself was the
+ * problem, in two independent ways:
+ *
+ * 1. **It quantised catastrophically.** The shader summed a small *integer*
+ *    count of land hits. On a 40-degree path at the shipped 40-sample cap,
+ *    zero land samples gives transmission 1.0000 and *one* gives 0.1129 —
+ *    so whether a single sample happened to land on an island decided
+ *    whether a pixel was bright or black. Adjacent pixels made that coin
+ *    flip independently: measured in the Caribbean, 11.2% of neighbouring
+ *    sample pairs differed by more than 0.25, with jumps as large as 0.997.
+ *    That is the speckle, exactly.
+ * 2. **It undersampled.** That same 40-sample cap spreads samples 108km
+ *    apart on a 40-degree path — four times coarser than the 25km land mask
+ *    it is reading, so entire countries fall between samples. (Round "16."
+ *    fixed this for the CPU, whose cap is 200, but the GLSL mirror kept 40:
+ *    two places holding one fact, this project's own recurring bug shape.)
+ *
+ * No amount of tuning fixes a model whose output is a low integer count.
+ * What replaced it is the physically-correct shape of the problem: land
+ * casts a **shadow**, and the only thing that puts energy back into a
+ * shadow is **diffraction** around its edges.
+ *
+ * So, per source, we precompute one number per bearing — the angular
+ * distance at which that ray first meets land (`buildShadowRow`) — and then
+ * ask, for any point, what fraction of the first Fresnel zone around the
+ * direct ray is unobstructed (`shadowTransmission`). That is the standard
+ * Fresnel-clearance model for wave shadowing, and it produces both halves of
+ * what the user asked for from one mechanism, with no island/continent
+ * special case:
+ *
+ *   - an obstacle narrower than the Fresnel zone barely dents the swell —
+ *     the wave bends around it (measured: a 10km islet transmits 1.000);
+ *   - an obstacle much wider than it extinguishes the swell completely
+ *     (measured: 150km and up transmits 0.000, and Panama's ~70km isthmus,
+ *     the exact case that survived three rounds, transmits 0.051).
+ *
+ * It also cannot speckle by construction, which the old model could not
+ * promise: the taps sit on fixed texel centres and only their Gaussian
+ * weights slide with position, so transmission is a continuous function of
+ * where the fragment is.
  */
-export const LAND_BLOCK_SCALE_RAD = 0.008;
 
-/** Angular step between occlusion samples, radians — ~25km at Earth's
- * radius, matched to `earth-water.png`'s own resolution (1600px wide, so
- * one texel is already ~25km). Finer than this would be sampling detail
- * the land mask itself doesn't have; coarser risks stepping clean over a
- * real coastline between two samples (see `MAX_OCCLUSION_SAMPLES` below
- * for why that isn't just theoretical). */
-export const OCCLUSION_STEP_RAD = 0.004;
+/** Bearings resolved per source, i.e. the width of one row of the shadow map.
+ * At 2048 the worst-case gap between adjacent bearings is 19.6km (at a
+ * quarter-turn from the source, where rays are furthest apart) — finer than
+ * the 25km land mask this is baked from, so the bearing grid is not the
+ * limiting resolution anywhere. */
+export const SHADOW_BEARINGS = 2048;
+
+/** Angular step the bake walks each bearing outward in, radians (~19km).
+ * Finer than `earth-water.png`'s own 25km texel, so a ray cannot step over a
+ * coastline. */
+export const SHADOW_MARCH_STEP_RAD = 0.003;
+
+/** Land closer than this to a source's own origin is ignored, so a storm
+ * sitting on a coastline does not shadow itself. Mirrors the old
+ * `pathOcclusion`'s "exclude both endpoints" behaviour. */
+export const SHADOW_NEAR_SKIP_RAD = 0.004;
+
+/** Floor on the Fresnel radius, km. The mask resolves 25km, so claiming a
+ * shadow edge sharper than that would be inventing geography — and a floor
+ * at the bearing spacing is also what keeps the aperture wide enough to stay
+ * smooth (it guarantees the Gaussian always spans more than one tap). */
+export const SHADOW_MIN_SOFT_KM = 25;
 
 /**
- * Cap on samples per `pathOcclusion` call, regardless of distance.
+ * Width, in bearings, of the morphological closing applied to a baked row.
  *
- * Round "15." sampled a *fixed count* (24) spread evenly across however far
- * apart origin and point are — fine for a nearby point, but for a source
- * thousands of km away the spacing grows past the width of most countries.
- * Measured directly: 24 samples toward Costa Rica's Pacific coast from a
- * real North Atlantic source landed **0 of 24** on Central America,
- * reporting a dead-clear path through solid land. Sampling at a fixed
- * *step* instead of a fixed *count* fixes that; the count this cap allows
- * for the longest possible path (antipodal, `d = π`) is `π /
- * OCCLUSION_STEP_RAD ≈ 785` — capped here well below that because the
- * atlas that bakes this (`landOcclusion.ts`) calls it ~50,000 times, and
- * every unblocked coastline this project cares about is far short of
- * antipodal from every source, so this cap only ever coarsens the samples
- * for the sliver of a texture where nothing renders anyway (max range
- * energy has already decayed away by then).
+ * An island too small to draw should not cast a shadow you can see, and
+ * without this one does: a 40km islet blocks one or two bearings, and that
+ * projects a hard dark line across thousands of km of open ocean, beginning
+ * abruptly at an obstacle far too small to render. Measured on the first
+ * build of this model, several such lines crossed the North Atlantic swell,
+ * with blunt square ends where the invisible island sat.
+ *
+ * A closing (dilate, then erode) fills valleys in the row narrower than its
+ * structuring element while leaving wider ones and every peak untouched, so
+ * it removes exactly those isolated near-blocks and nothing else. It cannot
+ * weaken a real barrier: measured against the real mask, Central America
+ * blocks a 587-bearing-wide span of a Pacific source's row, against the one
+ * and two bearings an islet blocks — over two orders of magnitude apart, so
+ * there is a wide range of workable widths rather than a tuned edge. It also
+ * leaves narrow *gaps* alone, being extensive, so a strait still passes
+ * swell through it.
  */
-export const MAX_OCCLUSION_SAMPLES = 200;
+export const SHADOW_CLOSE_BEARINGS = 7;
+
+/** Taps each side of centre in the aperture sum. With the Gaussian width
+ * clamped below to at most 2.8 taps, +/-6 reaches beyond 2.1 sigma, where the
+ * weight is already 0.012. */
+export const SHADOW_TAPS = 6;
+
+
+/** Deep-water wavelength for a peak period, km — `g T^2 / 2pi`. Longer-period
+ * swell has a longer wavelength and so diffracts further into a shadow,
+ * which is why this is per-source rather than a constant. */
+export function wavelengthKm(periodS: number): number {
+  return (9.81 * periodS * periodS) / (2 * Math.PI) / 1000;
+}
 
 /**
- * Fraction of a swell's energy that reaches `point` from `origin`, given
- * `isLand` — anything from 1 (clear path, no attenuation) down toward 0
- * (path crosses enough contiguous land to be fully shadowed).
- *
- * Deliberately dependency-free like the rest of this module: `isLand` is
- * injected rather than reading a texture directly, so this same function
- * serves the browser (real land-mask pixels, see `landOcclusion.ts`) and
- * is still testable with a synthetic `isLand` under Node, without this
- * module knowing anything about images or WebGL.
- *
- * Walks the great-circle arc strictly *between* origin and point (excluding
- * both endpoints — a source whose own origin sits on a coastline, or a
- * point that happens to land exactly on a small island, should not make
- * the whole path read as blocked because of the endpoint itself) via a
- * fixed per-step rotation rather than repeated `slerp`: the step direction
- * and angle are the same on every iteration, so `cos`/`sin` are computed
- * once for the whole call instead of twice per sample. This is called
- * O(10^4-10^5) times per source when `landOcclusion.ts` bakes its atlas, so
- * the per-sample cost is what actually matters for load time.
+ * An orthonormal frame at a source's origin, defining the zero of bearing.
+ * Every consumer — the bake, the CPU evaluation, and the uniforms the shader
+ * reads — takes the frame from this one function, so a bearing means the
+ * same thing on both sides of the CPU/GPU line.
  */
-export function pathOcclusion(origin: Vec3, point: Vec3, isLand: (p: Vec3) => boolean): number {
-  const cosD = Math.max(-1, Math.min(1, dot3(origin, point)));
-  const d = Math.acos(cosD);
-  if (d < 1e-6) return 1;
+export function sourceFrame(origin: Vec3): { e1: Vec3; e2: Vec3 } {
+  const ref: Vec3 = Math.abs(origin[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  const e1 = normalize3(cross3(ref, origin));
+  return { e1, e2: cross3(origin, e1) };
+}
 
-  const samples = Math.min(MAX_OCCLUSION_SAMPLES, Math.max(8, Math.ceil(d / OCCLUSION_STEP_RAD)));
-
-  // Axis normal to the great-circle plane through origin and point — since
-  // origin (and every point this walk visits) lies in that plane, it is
-  // always perpendicular to the walked vector, which is what lets the
-  // rotation below skip the "component along axis" term Rodrigues' formula
-  // otherwise needs.
-  const axis = normalize3(cross3(origin, point));
-  const delta = d / (samples + 1);
-  const cosDelta = Math.cos(delta);
-  const sinDelta = Math.sin(delta);
-
-  let v: Vec3 = origin;
-  let landSamples = 0;
-  for (let i = 0; i < samples; i++) {
-    const c = cross3(axis, v);
-    v = [v[0] * cosDelta + c[0] * sinDelta, v[1] * cosDelta + c[1] * sinDelta, v[2] * cosDelta + c[2] * sinDelta];
-    if (isLand(v)) landSamples++;
+/** Circular grey-scale closing: dilation then erosion, both over `width`
+ * bearings. Wraps, because bearing 0 and bearing 2047 are neighbours. */
+function closeRow(row: Float32Array, width: number): Float32Array {
+  const n = row.length;
+  const half = Math.floor(width / 2);
+  const dilated = new Float32Array(n);
+  for (let a = 0; a < n; a++) {
+    let m = -Infinity;
+    for (let k = -half; k <= half; k++) m = Math.max(m, row[(((a + k) % n) + n) % n]);
+    dilated[a] = m;
   }
+  const out = new Float32Array(n);
+  for (let a = 0; a < n; a++) {
+    let m = Infinity;
+    for (let k = -half; k <= half; k++) m = Math.min(m, dilated[(((a + k) % n) + n) % n]);
+    out[a] = m;
+  }
+  return out;
+}
 
-  const landAngularLength = d * (landSamples / samples);
-  return Math.exp(-landAngularLength / LAND_BLOCK_SCALE_RAD);
+/**
+ * One row of the shadow map: for each of `SHADOW_BEARINGS` bearings from
+ * `origin`, the angular distance at which that ray first meets land (or PI if
+ * it never does).
+ *
+ * Blocking latches — once a ray has crossed a coastline it stays blocked for
+ * the rest of its length, because that is what a geometric shadow is.
+ * Whether any energy reaches a point *inside* that shadow is
+ * `shadowTransmission`'s job, not this one's. The latch is also what makes
+ * the bake cheap: a ray stops marching the moment it hits land, so the
+ * expensive rays are only the ones with a clear run to the antipode.
+ *
+ * Sub-sampling each bearing cell (so a cell could carry *how much* of it is
+ * blocked, letting an obstacle narrower than one cell cost less than the
+ * whole cell) was built and measured: at 4 sub-bearings it changed the
+ * partial-transmission area of the globe from 3.376% to 3.326% and the
+ * scored error counts not at all, for 4x the bake time. Removed rather than
+ * kept as an unused knob.
+ *
+ * The row is closed before it is returned — see `SHADOW_CLOSE_BEARINGS`.
+ */
+export function buildShadowRow(origin: Vec3, isLand: (p: Vec3) => boolean): Float32Array {
+  const { e1, e2 } = sourceFrame(origin);
+  const row = new Float32Array(SHADOW_BEARINGS);
+  for (let a = 0; a < SHADOW_BEARINGS; a++) {
+    const az = (a / SHADOW_BEARINGS) * 2 * Math.PI;
+    const c = Math.cos(az);
+    const s = Math.sin(az);
+    const dir: Vec3 = [e1[0] * c + e2[0] * s, e1[1] * c + e2[1] * s, e1[2] * c + e2[2] * s];
+    let hit = Math.PI;
+    for (let r = SHADOW_NEAR_SKIP_RAD; r <= Math.PI; r += SHADOW_MARCH_STEP_RAD) {
+      const cr = Math.cos(r);
+      const sr = Math.sin(r);
+      if (isLand([origin[0] * cr + dir[0] * sr, origin[1] * cr + dir[1] * sr, origin[2] * cr + dir[2] * sr])) {
+        hit = r;
+        break;
+      }
+    }
+    row[a] = hit;
+  }
+  return closeRow(row, SHADOW_CLOSE_BEARINGS);
+}
+
+/**
+ * Fraction of this source's energy reaching `point` — 1 on a clear path,
+ * 0 deep in a continent's shadow, and a smooth ramp between the two.
+ *
+ * The GLSL mirror is `SWELL_SHADOW_GLSL` below and `parity-probe.mjs`'s B3
+ * gate asserts the two agree; rounds "15." and "17." both shipped with that
+ * agreement eyeballed rather than measured and both noted it as the gap
+ * worth closing.
+ */
+export function shadowTransmission(
+  row: Float32Array,
+  origin: Vec3,
+  e1: Vec3,
+  e2: Vec3,
+  point: Vec3,
+  periodS: number,
+): number {
+  const cosR = Math.max(-1, Math.min(1, dot3(origin, point)));
+  const r = Math.acos(cosR);
+  if (r < SHADOW_NEAR_SKIP_RAD) return 1;
+
+  // Bearing of `point` from `origin`, in the source's own frame.
+  const t = normalize3([point[0] - origin[0] * cosR, point[1] - origin[1] * cosR, point[2] - origin[2] * cosR]);
+  const az = Math.atan2(dot3(t, e2), dot3(t, e1));
+  const fa = ((((az / (2 * Math.PI)) % 1) + 1) % 1) * SHADOW_BEARINGS;
+  // Fresnel radius, taken at the worst case (an obstacle at the path's
+  // midpoint) so it depends only on the path length and the wavelength and is
+  // therefore continuous everywhere — a radius that tracked each ray's own
+  // blocking distance would jump across a shadow edge, which is the class of
+  // discontinuity this whole model exists to remove.
+  const kmPerBearing = Math.max(Math.sin(r), 0.05) * EARTH_RADIUS_KM * ((2 * Math.PI) / SHADOW_BEARINGS);
+  const sigmaKm = Math.max(SHADOW_MIN_SOFT_KM, Math.sqrt((wavelengthKm(periodS) * r * EARTH_RADIUS_KM) / 4));
+  const sigma = Math.max(1.2, Math.min(2.8, sigmaKm / kmPerBearing));
+  const soft = sigmaKm / EARTH_RADIUS_KM;
+
+  // Taps sit on fixed bearing centres; only the weights slide with the
+  // fragment's exact bearing. That is what makes this continuous in `point`
+  // by construction — and it means CPU and GPU read the same texels rather
+  // than two interpolations of them.
+  const i0 = Math.round(fa);
+  let num = 0;
+  let den = 0;
+  for (let k = -SHADOW_TAPS; k <= SHADOW_TAPS; k++) {
+    const i = i0 + k;
+    const dx = (i - fa) / sigma;
+    const w = Math.exp(-dx * dx);
+    const rBlock = row[((i % SHADOW_BEARINGS) + SHADOW_BEARINGS) % SHADOW_BEARINGS];
+    num += w * smoothstep(-soft, soft, rBlock - r);
+    den += w;
+  }
+  return num / den;
 }
 
 export function smoothstep(edge0: number, edge1: number, x: number): number {
@@ -607,5 +744,78 @@ export const SWELL_FIELD_GLSL = /* glsl */ `
     float env = moanaCometEnvelope(d, rLead, rTrail);
     if (env <= 0.0) return 0.0;
     return env * moanaSpread(S, D, P, d) * amp;
+  }
+`;
+
+/**
+ * GLSL mirror of `shadowTransmission` above, kept in this file for the same
+ * reason every other mirror is: `parity-probe.mjs` compiles *this* string and
+ * asserts it against the TypeScript, so the two cannot drift. Rounds "15."
+ * and "17." both shipped a land-occlusion mirror that was only ever verified
+ * by reading the two side by side, and both flagged that as the gap worth
+ * closing — this is that gap closed. It is a separate export from
+ * `SWELL_FIELD_GLSL` because it needs a sampler, and the older probes
+ * compile that string without binding one.
+ *
+ * `rowV` is the caller's v coordinate for this source's row of the shadow
+ * map, so this function needs no opinion about how many sources exist.
+ *
+ * The map must be sampled with `NearestFilter` and no mipmaps: this is called
+ * inside non-uniform control flow (only fragments actually inside a packet
+ * pay for it), where implicit derivatives — and therefore any mip selection —
+ * are undefined. Round "17."'s version sampled a mip-mapped land mask in
+ * exactly that position.
+ */
+export const SWELL_SHADOW_GLSL = /* glsl */ `
+  uniform sampler2D uShadowMap;
+
+  const float MOANA_SHADOW_BEARINGS = ${SHADOW_BEARINGS.toFixed(1)};
+  const float MOANA_SHADOW_NEAR_SKIP = ${SHADOW_NEAR_SKIP_RAD.toFixed(5)};
+  const float MOANA_SHADOW_MIN_SOFT_KM = ${SHADOW_MIN_SOFT_KM.toFixed(1)};
+  const float MOANA_EARTH_RADIUS_KM = ${EARTH_RADIUS_KM.toFixed(1)};
+  const float MOANA_TWO_PI = 6.28318531;
+  const int MOANA_SHADOW_TAPS = ${SHADOW_TAPS};
+
+  // One bearing's first-blocking distance, decoded from the 16 bits the bake
+  // packs into r,g. Eight bits would quantise the distance to 78km, which is
+  // wider than the isthmus this has to resolve.
+  float moanaShadowRow(float rowV, float bearingIndex) {
+    vec4 t = texture2D(uShadowMap, vec2((bearingIndex + 0.5) / MOANA_SHADOW_BEARINGS, rowV));
+    return (t.r + t.g / 255.0) * 3.14159265;
+  }
+
+  // Mirrors wavelengthKm() in swellField.ts.
+  float moanaWavelengthKm(float periodS) {
+    return (9.81 * periodS * periodS) / MOANA_TWO_PI / 1000.0;
+  }
+
+  // Mirrors shadowTransmission() in swellField.ts.
+  float moanaShadow(float rowV, vec3 S, vec3 E1, vec3 E2, vec3 P, float periodS) {
+    float cosR = clamp(dot(S, P), -1.0, 1.0);
+    float r = acos(cosR);
+    if (r < MOANA_SHADOW_NEAR_SKIP) return 1.0;
+
+    vec3 raw = P - S * cosR;
+    float len = length(raw);
+    vec3 t = len > 1e-6 ? raw / len : E1;
+    float fa = fract(atan(dot(t, E2), dot(t, E1)) / MOANA_TWO_PI) * MOANA_SHADOW_BEARINGS;
+
+    float sigmaKm = max(MOANA_SHADOW_MIN_SOFT_KM,
+                        sqrt(moanaWavelengthKm(periodS) * r * MOANA_EARTH_RADIUS_KM / 4.0));
+    float kmPerBearing = max(sin(r), 0.05) * MOANA_EARTH_RADIUS_KM * (MOANA_TWO_PI / MOANA_SHADOW_BEARINGS);
+    float sigma = clamp(sigmaKm / kmPerBearing, 1.2, 2.8);
+    float soft = sigmaKm / MOANA_EARTH_RADIUS_KM;
+
+    float i0 = floor(fa + 0.5);
+    float num = 0.0;
+    float den = 0.0;
+    for (int k = -MOANA_SHADOW_TAPS; k <= MOANA_SHADOW_TAPS; k++) {
+      float i = i0 + float(k);
+      float dx = (i - fa) / sigma;
+      float w = exp(-dx * dx);
+      num += w * smoothstep(-soft, soft, moanaShadowRow(rowV, i) - r);
+      den += w;
+    }
+    return num / den;
   }
 `;

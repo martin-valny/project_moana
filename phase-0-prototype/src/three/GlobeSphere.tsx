@@ -4,8 +4,8 @@ import * as THREE from 'three';
 import { SIMPLEX_NOISE_GLSL } from './shaders/noise';
 import { FBM_GLSL } from './shaders/fbm';
 import { MAX_SWELL_SOURCES, buildSwellSources, resolveSwellSources } from '../data/swellSources';
-import { LAND_BLOCK_SCALE_RAD, OCCLUSION_STEP_RAD, SWELL_FIELD_GLSL, type Vec3 } from '../data/swellField';
-import { buildIsLand } from './landOcclusion';
+import { SWELL_FIELD_GLSL, SWELL_SHADOW_GLSL, type Vec3 } from '../data/swellField';
+import { buildIsLand, buildShadowMap, type ShadowMap } from './landOcclusion';
 import {
   PERIOD_HUE_MAX_S,
   PERIOD_HUE_MIN_S,
@@ -62,6 +62,12 @@ const SURFACE_FRAGMENT = /* glsl */ `
   uniform float uSourceRTrail[MAX_SOURCES]; // trailing edge, radians
   uniform float uSourceAmp[MAX_SOURCES];    // energy x spawn ramp x packet attenuation
   uniform float uSourcePeriod[MAX_SOURCES]; // seconds — drives hue and filament anisotropy
+  // Basis vectors defining the zero of bearing for each source's row of the
+  // shadow map. Computed by sourceFrame() in swellField.ts and uploaded, so
+  // the bake and the shader agree on what a bearing means by construction
+  // rather than by two matching derivations.
+  uniform vec3 uSourceE1[MAX_SOURCES];
+  uniform vec3 uSourceE2[MAX_SOURCES];
 
   /** Hours the scrubber is showing, so filaments advect with the scrub. */
   uniform float uScrubHours;
@@ -95,60 +101,11 @@ const SURFACE_FRAGMENT = /* glsl */ `
     return vec2(theta / (2.0 * 3.14159265), phi / 3.14159265);
   }
 
-  /** 1.0 if p reads as land on the real mask, matching posToUv/uLandMask's
-   * own r<0.5=land convention used by every other land test in this file. */
-  float landAt(vec3 p) {
-    return texture2D(uLandMask, posToUv(p)).r < 0.5 ? 1.0 : 0.0;
-  }
-
-  // Land shadowing: how much of a source's swell reaches this fragment,
-  // given how much contiguous land the great-circle path between them
-  // crosses (swellField.ts's pathOcclusion is the physics and the CPU half
-  // of this; this is its GLSL mirror). Round "15." baked this into a
-  // precomputed texture atlas instead of computing it live — wrong call,
-  // reverted in round "17.": a baked atlas needs a destination grid with
-  // *some* fixed resolution, and Central America's Panama isthmus (~70km)
-  // is narrower than that grid could ever be made without an impractical
-  // texel count (a 128x64 atlas is ~310km/texel; resolving 70km needs
-  // ~40x that many texels, ~30s+ to bake). Computing this per fragment
-  // instead has no such ceiling — every fragment reads uLandMask at its
-  // own exact resolution, the same texture the land/ocean coloring above
-  // already samples, so there is no separate grid to be too coarse.
-  //
-  // Walks the arc via a fixed per-step rotation (cross product + two
-  // multiplies), not repeated slerp — cosDelta/sinDelta are computed once
-  // per call rather than per sample, matching swellField.ts's own
-  // optimisation for the same reason: this runs inside the per-source loop
-  // below, gated on w > 0.0 so it only costs anything for fragments
-  // actually inside a source's current packet ring, but still worth
-  // keeping cheap per sample.
-  const int OCCLUSION_MAX_SAMPLES = 40;
-  float pathOcclusion(vec3 origin, vec3 point) {
-    float cosD = clamp(dot(origin, point), -1.0, 1.0);
-    float d = acos(cosD);
-    if (d < 1e-4) return 1.0;
-
-    int samples = int(min(float(OCCLUSION_MAX_SAMPLES), max(4.0, ceil(d / ${OCCLUSION_STEP_RAD}))));
-
-    vec3 axisRaw = cross(origin, point);
-    float axisLen = length(axisRaw);
-    vec3 axis = axisLen > 1e-6 ? axisRaw / axisLen : vec3(0.0, 0.0, 1.0);
-    float delta = d / (float(samples) + 1.0);
-    float cosDelta = cos(delta);
-    float sinDelta = sin(delta);
-
-    vec3 v = origin;
-    float landSamples = 0.0;
-    for (int s = 0; s < OCCLUSION_MAX_SAMPLES; s++) {
-      if (s >= samples) break;
-      vec3 c = cross(axis, v);
-      v = v * cosDelta + c * sinDelta;
-      landSamples += landAt(v);
-    }
-
-    float landAngularLength = d * (landSamples / float(samples));
-    return exp(-landAngularLength / ${LAND_BLOCK_SCALE_RAD});
-  }
+  // Land shadowing. The model, why it is a shadow rather than an
+  // attenuation, and what the previous three attempts got wrong is all in
+  // swellField.ts; this is its GLSL mirror, included from there so
+  // parity-probe.mjs's B3 gate measures the code that actually renders.
+  ${SWELL_SHADOW_GLSL}
 
   void main() {
     vec2 uv = posToUv(vPos);
@@ -290,7 +247,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
         // fragments, most of the time, are not), rather than every
         // fragment paying for every source unconditionally.
         if (w > 0.0) {
-          w *= pathOcclusion(S, vPos);
+          w *= moanaShadow((float(i) + 0.5) / float(MAX_SOURCES), S, uSourceE1[i], uSourceE2[i], vPos, uSourcePeriod[i]);
         }
         float poleFade = smoothstep(0.0, MOANA_FLOW_POLE, d);
         // The hairy-ball singularity, still real and still handled inside
@@ -652,12 +609,13 @@ interface GlobeSphereProps {
   selectedIndex: number;
   /** Called with the tapped point as a unit vector, for Globe.tsx to resolve to a source. */
   onPick?: (unit: THREE.Vector3) => void;
-  /** Reports the land sampler once the mask image is decoded, so Globe.tsx's
-   * hit-testing can apply the same land shadowing the shader renders —
-   * otherwise tapping a spot the shader now (correctly) shows as shadowed
-   * could still select a source that reads as strongest there by the old,
-   * land-blind math. See landOcclusion.ts. */
-  onLandReady?: (isLand: (p: Vec3) => boolean) => void;
+  /** Reports the baked shadow map once the mask image is decoded, so
+   * Globe.tsx's hit-testing can apply the same land shadowing the shader
+   * renders — otherwise tapping a spot the shader now (correctly) shows as
+   * shadowed could still select a source that reads as strongest there by
+   * land-blind math. Both sides read the one baked `Float32Array`, so they
+   * cannot disagree. See landOcclusion.ts. */
+  onShadowReady?: (shadow: ShadowMap) => void;
   octaves?: number;
 }
 
@@ -680,7 +638,7 @@ export function GlobeSphere({
   offsetHours,
   selectedIndex,
   onPick,
-  onLandReady,
+  onShadowReady,
   octaves = 5,
 }: GlobeSphereProps) {
   // Round 7: a real (Natural-Earth-derived) land/ocean mask replaces the
@@ -708,19 +666,39 @@ export function GlobeSphere({
   // startTime), so this only needs to recompute if that identity changes.
   const sources = useMemo(() => buildSwellSources(pulse), [pulse]);
 
-  // Land shadowing: decoded once from the same mask image already loaded
-  // above, and reported up so Globe.tsx's hit-testing can apply the
-  // identical occlusion the shader renders (both now call swellField.ts's
-  // pathOcclusion — the shader via its own GLSL mirror against uLandMask
-  // directly, see the SURFACE_FRAGMENT definition above; no baked texture
-  // in between for either side any more, round "17.").
+  // Land shadowing: the mask image is decoded once into an `isLand` sampler,
+  // and each source's shadow row baked from it (~300ms for six sources,
+  // measured). Both the texture the shader samples and the CPU answer
+  // hit-testing needs come out of this one bake — see landOcclusion.ts.
   const isLand = useMemo(
     () => buildIsLand(landMask.image as CanvasImageSource, landMask.image.width, landMask.image.height),
     [landMask],
   );
+  const shadow = useMemo(
+    () =>
+      buildShadowMap(
+        sources.map((s) => [s.origin.x, s.origin.y, s.origin.z] as Vec3),
+        sources.map((s) => s.periodS),
+        MAX_SWELL_SOURCES,
+        isLand,
+      ),
+    [sources, isLand],
+  );
   useEffect(() => {
-    onLandReady?.(isLand);
-  }, [isLand, onLandReady]);
+    onShadowReady?.(shadow);
+  }, [shadow, onShadowReady]);
+
+  // The bearing frames, in the fixed-length shape the uniform arrays need.
+  const { e1Array, e2Array } = useMemo(() => {
+    const e1Array: THREE.Vector3[] = [];
+    const e2Array: THREE.Vector3[] = [];
+    for (let i = 0; i < MAX_SWELL_SOURCES; i++) {
+      const f = shadow.frames[i];
+      e1Array.push(f ? new THREE.Vector3(...f.e1) : new THREE.Vector3(1, 0, 0));
+      e2Array.push(f ? new THREE.Vector3(...f.e2) : new THREE.Vector3(0, 0, 1));
+    }
+    return { e1Array, e2Array };
+  }, [shadow]);
 
   // Fixed-length arrays for the shader's uniform arrays: unused slots (if
   // fewer than MAX_SWELL_SOURCES sources exist) get zero energy below, so
@@ -767,6 +745,9 @@ export function GlobeSphere({
       uSourceRTrail: { value: rTrailArray },
       uSourceAmp: { value: ampArray },
       uSourcePeriod: { value: periodArray },
+      uSourceE1: { value: e1Array },
+      uSourceE2: { value: e2Array },
+      uShadowMap: { value: shadow.texture },
       uScrubHours: { value: offsetHours },
       uSelected: { value: selectedIndex },
       uOctaves: { value: octaves },
@@ -837,6 +818,9 @@ export function GlobeSphere({
     material.uniforms.uSourceRTrail.value = rTrailArray;
     material.uniforms.uSourceAmp.value = ampArray;
     material.uniforms.uSourcePeriod.value = periodArray;
+    material.uniforms.uSourceE1.value = e1Array;
+    material.uniforms.uSourceE2.value = e2Array;
+    material.uniforms.uShadowMap.value = shadow.texture;
     material.uniforms.uScrubHours.value = offsetHours;
     material.uniforms.uSelected.value = selectedIndex;
     material.uniforms.uOctaves.value = octaves;
@@ -848,6 +832,9 @@ export function GlobeSphere({
     rTrailArray,
     ampArray,
     periodArray,
+    e1Array,
+    e2Array,
+    shadow.texture,
     offsetHours,
     selectedIndex,
     octaves,
