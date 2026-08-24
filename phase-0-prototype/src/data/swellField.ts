@@ -346,15 +346,8 @@ function normalize3(v: Vec3): Vec3 {
   return l > 1e-9 ? [v[0] / l, v[1] / l, v[2] / l] : [0, 0, 1];
 }
 
-/** Spherical linear interpolation between two unit vectors, t in [0,1]. */
-function slerpUnit(a: Vec3, b: Vec3, t: number): Vec3 {
-  const cosOmega = Math.max(-1, Math.min(1, dot3(a, b)));
-  const omega = Math.acos(cosOmega);
-  if (omega < 1e-6) return a;
-  const sinOmega = Math.sin(omega);
-  const wa = Math.sin((1 - t) * omega) / sinOmega;
-  const wb = Math.sin(t * omega) / sinOmega;
-  return [a[0] * wa + b[0] * wb, a[1] * wa + b[1] * wb, a[2] * wa + b[2] * wb];
+function cross3(a: Vec3, b: Vec3): Vec3 {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 }
 
 /**
@@ -365,14 +358,46 @@ function slerpUnit(a: Vec3, b: Vec3, t: number): Vec3 {
  * shadow-zone coast, but it *does* diffract around a small island and
  * mostly refill just behind it, per real coastal-engineering wave
  * diffraction (Huygens' principle for waves meeting a small obstacle).
- * 0.05 rad is ~320km at Earth's radius — a small island's land-crossing
- * (tens of km) barely dents transmission; a real continent's crossing
- * (many hundreds to thousands of km) drives it to ~0.
+ *
+ * 0.008 rad is ~51km at Earth's radius. Round "15." shipped this at 0.05
+ * rad (~320km) and it was wrong by an order of magnitude in the direction
+ * that matters least visibly: measured directly against a real source
+ * reaching the Gulf of Mexico through several hundred km of Central
+ * America/Mexico, that scale let 21% of the swell's energy leak straight
+ * through solid land. 0.008 rad drives a landmass more than ~100km wide to
+ * under 5% transmission (reads as "gone") while a feature of a few km to a
+ * few tens of km — an atoll, a barrier island — only dents it (round
+ * "16.").
  */
-export const LAND_BLOCK_SCALE_RAD = 0.05;
+export const LAND_BLOCK_SCALE_RAD = 0.008;
 
-/** How many points along a source-to-point path to sample for land. */
-export const OCCLUSION_SAMPLES = 24;
+/** Angular step between occlusion samples, radians — ~25km at Earth's
+ * radius, matched to `earth-water.png`'s own resolution (1600px wide, so
+ * one texel is already ~25km). Finer than this would be sampling detail
+ * the land mask itself doesn't have; coarser risks stepping clean over a
+ * real coastline between two samples (see `MAX_OCCLUSION_SAMPLES` below
+ * for why that isn't just theoretical). */
+export const OCCLUSION_STEP_RAD = 0.004;
+
+/**
+ * Cap on samples per `pathOcclusion` call, regardless of distance.
+ *
+ * Round "15." sampled a *fixed count* (24) spread evenly across however far
+ * apart origin and point are — fine for a nearby point, but for a source
+ * thousands of km away the spacing grows past the width of most countries.
+ * Measured directly: 24 samples toward Costa Rica's Pacific coast from a
+ * real North Atlantic source landed **0 of 24** on Central America,
+ * reporting a dead-clear path through solid land. Sampling at a fixed
+ * *step* instead of a fixed *count* fixes that; the count this cap allows
+ * for the longest possible path (antipodal, `d = π`) is `π /
+ * OCCLUSION_STEP_RAD ≈ 785` — capped here well below that because the
+ * atlas that bakes this (`landOcclusion.ts`) calls it ~50,000 times, and
+ * every unblocked coastline this project cares about is far short of
+ * antipodal from every source, so this cap only ever coarsens the samples
+ * for the sliver of a texture where nothing renders anyway (max range
+ * energy has already decayed away by then).
+ */
+export const MAX_OCCLUSION_SAMPLES = 200;
 
 /**
  * Fraction of a swell's energy that reaches `point` from `origin`, given
@@ -385,23 +410,42 @@ export const OCCLUSION_SAMPLES = 24;
  * is still testable with a synthetic `isLand` under Node, without this
  * module knowing anything about images or WebGL.
  *
- * Sampled at `OCCLUSION_SAMPLES` points strictly *between* origin and
- * point (excluding both endpoints) — a source whose own origin sits on a
- * coastline, or a point that happens to land exactly on a small island,
- * should not make the whole path read as blocked because of the endpoint
- * itself.
+ * Walks the great-circle arc strictly *between* origin and point (excluding
+ * both endpoints — a source whose own origin sits on a coastline, or a
+ * point that happens to land exactly on a small island, should not make
+ * the whole path read as blocked because of the endpoint itself) via a
+ * fixed per-step rotation rather than repeated `slerp`: the step direction
+ * and angle are the same on every iteration, so `cos`/`sin` are computed
+ * once for the whole call instead of twice per sample. This is called
+ * O(10^4-10^5) times per source when `landOcclusion.ts` bakes its atlas, so
+ * the per-sample cost is what actually matters for load time.
  */
 export function pathOcclusion(origin: Vec3, point: Vec3, isLand: (p: Vec3) => boolean): number {
-  const d = Math.acos(Math.max(-1, Math.min(1, dot3(origin, point))));
+  const cosD = Math.max(-1, Math.min(1, dot3(origin, point)));
+  const d = Math.acos(cosD);
   if (d < 1e-6) return 1;
 
+  const samples = Math.min(MAX_OCCLUSION_SAMPLES, Math.max(8, Math.ceil(d / OCCLUSION_STEP_RAD)));
+
+  // Axis normal to the great-circle plane through origin and point — since
+  // origin (and every point this walk visits) lies in that plane, it is
+  // always perpendicular to the walked vector, which is what lets the
+  // rotation below skip the "component along axis" term Rodrigues' formula
+  // otherwise needs.
+  const axis = normalize3(cross3(origin, point));
+  const delta = d / (samples + 1);
+  const cosDelta = Math.cos(delta);
+  const sinDelta = Math.sin(delta);
+
+  let v: Vec3 = origin;
   let landSamples = 0;
-  for (let i = 1; i <= OCCLUSION_SAMPLES; i++) {
-    const t = i / (OCCLUSION_SAMPLES + 1);
-    if (isLand(slerpUnit(origin, point, t))) landSamples++;
+  for (let i = 0; i < samples; i++) {
+    const c = cross3(axis, v);
+    v = [v[0] * cosDelta + c[0] * sinDelta, v[1] * cosDelta + c[1] * sinDelta, v[2] * cosDelta + c[2] * sinDelta];
+    if (isLand(v)) landSamples++;
   }
 
-  const landAngularLength = d * (landSamples / OCCLUSION_SAMPLES);
+  const landAngularLength = d * (landSamples / samples);
   return Math.exp(-landAngularLength / LAND_BLOCK_SCALE_RAD);
 }
 

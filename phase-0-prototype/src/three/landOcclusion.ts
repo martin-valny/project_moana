@@ -16,7 +16,7 @@ import type { SwellSource } from '../data/swellSources';
  * the whole session (`buildSwellSources` never moves one), so "how shadowed
  * is each point on the globe from this source" never changes after the
  * sources are built — computing it once at that point, rather than walking
- * `OCCLUSION_SAMPLES` land-mask lookups per source per *fragment* every
+ * `pathOcclusion`'s own land-mask lookups per source per *fragment* every
  * single frame, is the same answer for a fraction of the cost.
  *
  * **One packed atlas, with padding, not one texture per source.** An array

@@ -3053,6 +3053,109 @@ sampled texel from the actual built atlas would close that gap properly;
 not done here since it needs the atlas plus a CPU decode of a padded band,
 which is more scaffolding than this round's fix needed.
 
+### 16. Round "15." reduced the bug, it didn't close it — the user still saw swells crossing Central America
+
+**Reported immediately after round "15." shipped:** "still see swell passing through eg central america etc." Rather than guess, tested `pathOcclusion` directly against the *actual* production sources and the real `earth-water.png` mask (Node, `buildSwellSources`/`resolveSwellSources` imported unmodified) at real chokepoints, and found round "15." had two separate, real bugs of its own — not a rendering artifact, not a user misread.
+
+**Bug 1 — sampling aliasing.** `pathOcclusion` spread a *fixed* count (24) of
+samples evenly across however far apart origin and point were. Fine for a
+nearby point; for a source thousands of km away the spacing grows past the
+width of most countries. Measured directly: from the real North Atlantic
+source (`Track 35`) to Costa Rica's Pacific coast (~4655km away, correctly
+crossing all of Central America), 24 evenly-spread samples landed **0 of 24
+on land** — reporting a completely clear path straight through solid
+ground, occlusion = 1.0000. Denser sampling of the exact same path (300
+samples) found land the whole way through: occlusion ≈ 0.003. The fixed
+sample count wasn't a slightly-too-coarse approximation, it was silently
+missing entire countries.
+
+**Bug 2 — decay scale six times too generous.** Even on paths where round
+"15." *did* detect land, `LAND_BLOCK_SCALE_RAD = 0.05` rad (~320km) let a
+few-hundred-km landmass through at roughly half strength rather than
+extinguishing it. Measured against the real `Kaimana` source reaching the
+Gulf of Mexico (which has no water route from the South Pacific — the
+direct path necessarily crosses Mexico/Central America): **21% of its
+energy leaked straight through**, a small but visibly-nonzero glow the
+shader would render right where the coastline should have gone dark. A
+real continent doesn't attenuate a swell to half strength; it stops it.
+
+**Fix, both in `pathOcclusion` (`swellField.ts`):**
+
+1. **Sample at a fixed angular step, not a fixed count.** `OCCLUSION_STEP_RAD
+   = 0.004` (~25km — matched to `earth-water.png`'s own resolution, 1600px
+   wide; sampling finer than the mask's own texel size buys nothing).
+   Sample count is now `ceil(d / OCCLUSION_STEP_RAD)`, capped at
+   `MAX_OCCLUSION_SAMPLES = 200` so the atlas bake (below) stays bounded —
+   the cap only ever coarsens sampling for near-antipodal distances, where
+   every source's packet has already decayed to nothing anyway.
+2. **`LAND_BLOCK_SCALE_RAD` lowered from 0.05 rad to 0.008 rad (~51km).**
+   Re-run against the same real chokepoints: a landmass upward of ~100km
+   wide now reads under 5% transmission (visually gone), while a genuinely
+   small feature — tens of km — still only dents it, which is the
+   large-blocks/small-weakens split the user asked for in round "15.",
+   just tuned to an actual physical scale instead of one six times too
+   loose.
+3. **The sampling walk itself changed from repeated `slerp` to a fixed
+   per-step rotation** (Rodrigues' formula around the great-circle plane's
+   normal, computing `cos`/`sin` of the step angle once per call instead of
+   twice per sample) — a straight performance fix, not a behaviour change,
+   needed because #1 raises the typical sample count roughly 5-10x over
+   round "15." and this is called ~50,000 times baking one source's atlas
+   band.
+
+**Verified against real production code, not synthetic points.** A sweep
+script (`land-occlusion-sweep.mjs`, not committed — scratch, per this
+project's convention) imports `buildSwellSources`/`resolveSwellSources`/
+`sourceWeightAt`/`pathOcclusion` unmodified and the real `earth-water.png`
+mask, and checks the worst-case rendered brightness (`weight × occlusion`)
+at six chokepoints across the full -18h..96h scrub range:
+
+| chokepoint | worst leak (round "15.") | worst leak (this round) |
+|---|---|---|
+| Gulf of Mexico (behind Central America) | 0.0218 | 0.00003 |
+| Caribbean Sea (behind Central America) | not measured, same class of bug | 0.00196 |
+| Gulf of California (behind mainland Mexico) | not measured | 0.02653 |
+| Red Sea / Black Sea (behind Africa/Europe) | not measured | ~0.00000 |
+
+Two legitimate open-ocean paths were also checked to confirm they *don't* get over-blocked
+by the tighter scale: Kaimana (South Pacific) reaching the Gulf of Panama
+(a real, land-free Pacific approach) and Track 35 reaching mid-North
+Atlantic both still read occlusion = 1.0000, unchanged. The remaining
+non-zero leaks (Caribbean, Gulf of California) are an order of magnitude
+smaller than round "15."'s Gulf-of-Mexico leak and, on inspection, are
+largely real open-water approaches (the Gulf of California's own mouth
+opens directly onto the Pacific; a South Pacific swell can genuinely enter
+there without crossing land) rather than land aliasing — not chased further
+this round.
+
+Also re-ran the full existing regression suite: `field-metrics.mjs --cpu`
+(5/5), `parity-probe.mjs` (both gates), `qc-real-pulses.mjs` (all five real
+windows), `npm run build` / `npm run lint` all clean — none of these
+exercise `pathOcclusion` directly, so this confirms no regression rather
+than new coverage.
+
+**Not fully solved / left open:**
+- **Browser confirmation of the exact reported scene (Central America on
+  screen) is still pending as of this writing** — this sandbox's software
+  WebGL renderer is slow enough (a GPU process pinned at 300%+ CPU for
+  minutes to render a handful of frames, independent of this fix) that
+  driving the camera to a specific hemisphere and screenshotting reliably
+  within a normal tool timeout has been the bottleneck, not the fix itself.
+  The numeric verification above uses the exact same `pathOcclusion` the
+  shader's atlas is baked from and the exact real land mask, so it is not
+  a guess about what will render — but it is not a screenshot either, and
+  should be spot-checked against a real machine.
+- **Atlas bake time grew.** Measured in Node against the real functions,
+  baking one source's full 128×64 atlas band (what round "15."'s
+  `buildOcclusionAtlas` does six times, once per source, in a `useMemo` at
+  mount) takes ~1.4s for all six sources combined, up from round "15."'s
+  fixed-24-sample version (not separately measured then, but roughly
+  5-10x fewer samples). This is a one-time cost at load, not per-frame,
+  but it is a real addition to first-load time worth knowing about if §8's
+  gate ever measures time-to-interactive; moving the bake to a Web Worker
+  would remove it from the main thread if that becomes a problem, not done
+  here.
+
 ---
 
 ## What's next
