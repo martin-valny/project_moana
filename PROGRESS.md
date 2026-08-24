@@ -3156,6 +3156,85 @@ than new coverage.
   would remove it from the main thread if that becomes a problem, not done
   here.
 
+### 17. Round "16." was still wrong — not the sampling, the destination grid
+
+**Reported again, with a screenshot this time:** "still there look .. the
+swell is coming from left passing under central america and continuos
+right." The screenshot showed a bright swell ribbon sitting in open water
+right up to a coastline, with no visible staircase or blockiness — round
+"16."'s fixes had clearly landed — but with the coastline itself doing
+nothing to it.
+
+**Root cause: a resolution ceiling round "16." never touched.** Round
+"16." fixed how densely `pathOcclusion` samples *along* a source-to-point
+path. It never touched the other axis of the bug: the *destination* grid
+the computed values get stored into. `landOcclusion.ts`'s atlas is 128×64
+texels per source — about 2.8° per texel, ~310km at the equator. Central
+America's Panama isthmus is ~70km wide. No matter how accurately
+`pathOcclusion` computes any *individual* texel's value, a grid this coarse
+has no texel that ever lands squarely on a 70km feature — `LinearFilter`
+just interpolates between whatever open-ocean texels happen to bracket it,
+producing a smooth, never-quite-zero gradient across the whole region
+instead of a hard cutoff at the actual coastline. Tuning the atlas
+resolution to fix this properly does not work either: resolving a 70km
+feature needs texel spacing under ~35km, roughly 80× more texels than
+128×64 — at the per-texel cost round "16." already measured, that is a
+30s+ synchronous bake, not a viable fix.
+
+**The fix: stop baking a destination grid at all.** `GlobeSphere.tsx`'s
+fragment shader now calls its own GLSL mirror of `pathOcclusion` directly
+against `uLandMask` — the same full-resolution land-mask texture the base
+ocean/land coloring already samples — once per fragment, per source,
+inside the existing per-source loop. There is no grid to be coarser than
+the geography any more: every rendered pixel evaluates its own exact
+position against the real mask, the same one `isLand` reads on the CPU
+side. Gated behind `if (w > 0.0)`, so the sampling loop only actually runs
+for a fragment inside a source's current packet ring — most fragments,
+most of the time, skip it entirely — which is a cost model the atlas
+approach could never have, since it had to precompute every point on the
+globe for every source regardless of whether that source's ring would ever
+reach there.
+
+`landOcclusion.ts` lost `buildOcclusionAtlas`/`atlasHeight`/`ATLAS_WIDTH`/
+`ATLAS_HEIGHT_PER_SOURCE` entirely — the whole atlas-baking half of the
+file. What's left is just `buildIsLand`, still needed for `Globe.tsx`'s
+CPU-side hit-testing, which continues to call the same `pathOcclusion`
+from `swellField.ts` unchanged (round "16."'s sampling/decay-scale fix was
+correct and stays exactly as shipped — the bug this round found was purely
+about how the shader turned that correct math into pixels, not the math
+itself).
+
+**Verified.** `npm run build` / `npm run lint` clean. Full regression suite
+still passes: `field-metrics.mjs --cpu` (5/5), `parity-probe.mjs` (both
+gates), `qc-real-pulses.mjs` (all five real windows), `smoke-test.mjs`,
+`panel-glass-test.mjs`, `rotate-test.mjs` — none exercise land occlusion
+directly, so this confirms no regression rather than new coverage of this
+specific fix.
+
+Round "16." left browser confirmation of the exact reported scene
+outstanding, blocked on this sandbox's slow software renderer making
+camera-drag automation unreliable. Solved that properly this round instead
+of guessing: the app already exposes `window.__moanaProject` under `?e2e=1`
+(built for `field-metrics.mjs`'s pixel harness) — projecting a known
+lat/lon to screen coordinates and its camera-facing state made it possible
+to *drive* the camera toward Panama (9°N, 80°W) with closed-loop feedback
+(drag, re-project, check error, repeat) instead of guessing drag distances
+and hoping. Landed centered and facing in 5 iterations. Cropped in tight on
+the isthmus itself: the bright swell ribbon sits entirely in the Caribbean
+water east of the isthmus, stopping cleanly at the coastline — no bleed
+onto the landmass, no glow reappearing on the Pacific side. This is the
+first round of this bug that has an actual screenshot of the specific
+scene the user reported, not just numeric proof against the same functions
+that render it.
+
+**Not fully solved:** performance of the new per-fragment sampling on real
+hardware hasn't been measured — only functional correctness and this
+sandbox's own (software-rendered, not representative) frame rate. The `w >
+0.0` gate should make this cheap in practice (most fragments skip the loop
+entirely most of the time), but that is reasoning from the code, not a
+measurement on a real GPU. Worth a real-device check if the §8 gate or
+further use surfaces any frame-rate regression.
+
 ---
 
 ## What's next
@@ -3164,10 +3243,16 @@ than new coverage.
 other.** Thread A is the §8 human gate, unchanged from before and still
 needing the user. Thread B — the ingestion spike and its fix — is now done
 (see "10." and "11." above); what's left is a narrower harness follow-up.
-Land occlusion (see "15.") is a real bug the user found while exercising
-Thread B's real data, now fixed and verified, with one open follow-up: a
-parity check between the shader's atlas sampling and `pathOcclusion` (see
-"15."'s "Not fully solved").
+Land occlusion (see "15."-"17.") is a real bug the user found while
+exercising Thread B's real data, and took three rounds to actually close:
+round "15." added the mechanism but sampled too coarsely and used too loose
+a decay scale, round "16." fixed both of those but was still bottlenecked
+by a coarse destination texture atlas, and round "17." removed the atlas
+entirely in favour of computing occlusion live per fragment against the
+real land mask — verified this time against a screenshot of the specific
+scene the user reported (Panama), not just numeric proof. Real-device
+performance of the per-fragment approach is the one thing still unmeasured
+(see "17."'s "Not fully solved").
 
 ### Thread A — the §8 gate (unchanged, still needs the user)
 
