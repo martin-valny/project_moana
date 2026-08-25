@@ -3,36 +3,55 @@
 Last updated: 2026-08-24, branch `claude/swell-landmass-collision-j5f80b`.
 Working tree clean, everything below is pushed.
 
-**The current build is round 18.** Rounds 14 and 15 landed the current visual
+**The current build is round 18b — land-blind, reverted to `d92bfcf`.** Rounds 14 and 15 landed the current visual
 model: dispersive packets rather than filled disc sectors, brightness rather
 than hue as the strength signal, no drawn line or marker for Helena, the
 continents behind the water, and a panel glyph that tracks the scrubber.
 Round 17 changed no pixels — it settled the filament question and cleaned up
 after it.
 
-> ### Land shadowing is a shadow model — read this before "tuning" it
+> ### Land shadowing is REVERTED — read this before attempting it a fifth time
 >
-> Rounds "15."-"17." all tried to stop swells crossing continents by walking
-> the source-to-point arc, counting land samples, and attenuating by
-> `exp(-landLength / scale)`. Three rounds tuned that model's constants and
-> the user reported it broken all three times — first swells still crossing
-> Central America, then the whole field rendering as **choppy speckle**.
+> Four rounds ("15."–"18.") tried to stop swells crossing continents. All four
+> shipped, all four were rejected by the user. **All four are reverted.** The
+> build is land-blind again, on purpose, and swells do cross continents.
 >
-> The model was the bug. Its output was a small *integer* count: on a
-> 40-degree path, zero land samples gave 1.0000 and one gave 0.1129, so a
-> single sample landing on an island decided whether a pixel was bright or
-> black, and neighbouring pixels flipped independently (11.2% of adjacent
-> pairs differing by >0.25, jumps up to 0.997). No constant fixes that.
+> **Every one of them blocked per great-circle ray.** Rounds "15."–"17."
+> attenuated by how much land a source-to-point ray crossed; round "18." baked
+> one blocking distance per bearing and took a Fresnel aperture over it. The
+> user's verdict on "18.": *"you introduced some sharp straight edges/breaks in
+> swell and swell is still traveling under the continents"*.
 >
-> Round "18." replaced it: land casts a **shadow**, and only **diffraction**
-> puts energy back into one. Per source, one baked number per bearing (the
-> distance at which that ray first meets land); per fragment, the fraction of
-> the first Fresnel zone that is unobstructed. Small obstacles bend, large
-> ones block, from one mechanism. It cannot speckle by construction — the
-> taps are on fixed bearing centres and only their weights slide.
+> **The straight edges are what a per-ray model IS, not a tuning miss.** A
+> shadow boundary in such a model is the set of points where one ray is blocked
+> and its neighbour is not — which is a great circle, i.e. a straight radial
+> line on screen. Measured on the shipped "18." build, within the radius
+> packets actually reach, each source's bearing row contained **41–78 hard
+> steps** (13–31 of them larger than 0.1 rad, worst 2.93 rad) — roughly **300
+> hard radial lit/dark boundaries across the six sources**, softened over only
+> ~25 km. No constant fixes that.
 >
-> **`land-shadow-metrics.mjs` (Stage L) and `parity-probe.mjs`'s B3 now guard
-> this.** If you are about to change it, run them first and read "18.".
+> **The blocking strength was already correct — do not "fix" it by blocking
+> harder.** Scanning ~44,000 (source, ocean point) pairs on the shipped "18."
+> build for points lit above 0.15 whose direct path crosses more than 150 km of
+> land found **4**, all between 0.15 and 0.34. Energy was not leaking through
+> land in any meaningful quantity. The problem was never strength; it was
+> smoothness.
+>
+> **What the user was actually seeing on the second complaint** is a *beam
+> through a channel*: measured across the whole basin rather than at one
+> sample point, Helena reaches **0.994 at the Yucatán Channel** while the rest
+> of the Gulf of Mexico sits at ~0, and **1.000 in the SE Caribbean** through
+> the Antilles passages. Those are real openings, so the energy is defensible —
+> but it renders as a hard-edged bright finger pushing into a semi-enclosed
+> sea, which reads exactly as swell having crossed the land. **So both
+> complaints have one root cause: hard geometric shadow boundaries.**
+>
+> If this is attempted again, the mechanism must be one that *cannot* produce a
+> hard boundary — propagate energy outward and let land suppress it, the way
+> SWAN's obstacle transmission coefficients and WAVEWATCH III's obstruction
+> grids do, so every value is a weighted average of a widening neighbourhood.
+> Read "18b." below before starting.
 
 > ### The filament question is closed — read this before "fixing" the shader
 >
@@ -213,7 +232,6 @@ cd phase-0-prototype
 npm install
 npm run build && npm run lint
 node --import ./ts-resolve-hook.mjs --experimental-strip-types field-metrics.mjs --cpu     # Stage A, seconds
-node --import ./ts-resolve-hook.mjs --experimental-strip-types land-shadow-metrics.mjs    # Stage L, ~300ms
 npm run preview -- --port 4173 &
 node --import ./ts-resolve-hook.mjs --experimental-strip-types parity-probe.mjs            # Stage B, ~1s
 node --import ./ts-resolve-hook.mjs --experimental-strip-types field-metrics.mjs --pixels  # Stage C, ~5 min
@@ -221,11 +239,12 @@ node smoke-test.mjs && node panel-glass-test.mjs && node rotate-test.mjs
 node timeline-shots.mjs   # screenshots at every labelled stop, both viewports
 ```
 
-**Stage L is the land-shadow gate** (round "18."): enclosed seas stay dark,
-open ocean is not over-blocked, the field is smooth rather than speckled,
-small obstacles bend where large ones block, and swell still reaches the coast
-it is running at. It needs no renderer either. Run it before and after
-anything that touches `swellField.ts`'s shadow code or `landOcclusion.ts`.
+**There is no land-shadow gate any more** — round "18b." reverted the feature
+it guarded, so `land-shadow-metrics.mjs` and `parity-probe.mjs`'s `B3` are
+gone with it. If land shadowing is attempted again, both come back, and the
+gates need to cover *whole basins* rather than single points and be checked at
+**zoom** rather than only at globe scale. Round "18b." explains why both of
+those cost a round.
 
 **Do all geometry work in Stage A.** It runs against the TypeScript model with
 no renderer, so an iteration costs milliseconds against the ~60 s a screenshot
@@ -2965,7 +2984,7 @@ actually ran); the fix was then re-verified against `npm run preview` too
 itself lives in `useDampedValue.ts`'s math — it does not depend on which
 build serves the code.
 
-### 15. Swells were reading straight through continents — no land-awareness at all
+### [REVERTED — see "18b."] 15. Swells were reading straight through continents — no land-awareness at all
 
 **Reported by the user, watching the animation:** "swell kinda continue
 'under' continents and then just reappear on the other side... like if
@@ -3084,7 +3103,7 @@ sampled texel from the actual built atlas would close that gap properly;
 not done here since it needs the atlas plus a CPU decode of a padded band,
 which is more scaffolding than this round's fix needed.
 
-### 16. Round "15." reduced the bug, it didn't close it — the user still saw swells crossing Central America
+### [REVERTED — see "18b."] 16. Round "15." reduced the bug, it didn't close it — the user still saw swells crossing Central America
 
 **Reported immediately after round "15." shipped:** "still see swell passing through eg central america etc." Rather than guess, tested `pathOcclusion` directly against the *actual* production sources and the real `earth-water.png` mask (Node, `buildSwellSources`/`resolveSwellSources` imported unmodified) at real chokepoints, and found round "15." had two separate, real bugs of its own — not a rendering artifact, not a user misread.
 
@@ -3187,7 +3206,88 @@ than new coverage.
   would remove it from the main thread if that becomes a problem, not done
   here.
 
-### 18. The land-shadow model was wrong in kind, not in tuning — rewritten as a shadow
+### 18b. All four land-shadow rounds reverted, and the measurements that say why
+
+**Reported by the user on round "18."'s build:** *"thats really bad... you
+introduced some sharp straight edges/breaks in swell and swell is still
+traveling under the continents... Lets revert to version 15/16.. anywhere
+before we start dealing with traveling under continents."* Done — the code is
+back to `d92bfcf`, the parent of the first land commit.
+
+**The revert is exact.** The land work touched six files and nothing else, and
+rounds "15."–"17." made *pure additions* to `swellField.ts` (103 insertions, 0
+deletions), so nothing unrelated was entangled. `parity-probe.mjs` was
+untouched by those rounds — reverting it only drops the `B3` gate round "18."
+added. Verified after the revert: build and lint clean, Stage A 5/5, parity
+`B` 0.000999 and `B2` 1.0001, `qc-real-pulses` all five windows, smoke both
+viewports with zero console errors, `panel-glass-test`, `rotate-test`, and
+**Stage C back to 9/9 with M2 at 2.69** — which also confirms round "18."'s M2
+drop to 2.44 was caused by the land work and nothing else.
+
+**Four measurements worth more than the four attempts.** These were taken
+against the shipped "18." build before reverting it, and they are the reason a
+fifth attempt should not be a fifth variation on ray-casting:
+
+1. **~300 hard radial boundaries.** Each source's bearing row is a step
+   function; every step renders as a straight lit/dark line along a great
+   circle. Counted within the radius packets reach: 41–78 steps per source,
+   13–31 of them over 0.1 rad, worst 2.93 rad.
+2. **The blocking was already right.** Of ~44,000 (source, ocean point) pairs,
+   only **4** were lit above 0.15 with more than 150 km of land on the direct
+   path, and none above 0.34. The failure was smoothness, not strength.
+3. **Beams through channels.** Measured across whole basins instead of at one
+   point: Helena reaches 0.994 at the Yucatán Channel with the rest of the Gulf
+   of Mexico at ~0, and 1.000 in the SE Caribbean through the Antilles. Real
+   openings, but drawn as hard-edged fingers into semi-enclosed seas — which is
+   what "still traveling under the continents" was describing.
+4. **`M2`'s threshold assumed land-blind propagation.** Round "18." dropped it
+   to 2.44 purely by removing ocean that had been lit through the Americas.
+   Whatever replaces this will move `M2` again; that is expected, and the
+   answer is not to lower the threshold.
+
+**Three process failures, each of which cost a round:**
+
+- **Every gate measured at globe scale (~16–20 km/pixel), where 25 km of
+  softening is one pixel and invisible.** The user inspects at far higher zoom,
+  where the same boundary is several pixels of hard edge. A metric suite can be
+  entirely green against a build that looks broken. Zoomed screenshots have to
+  be a gate.
+- **Gates tested single hand-picked points.** Round "18."'s `L1` asserted the
+  Caribbean was dark using *one* sample at 15°N 75°W, which read 0.000. Sampling
+  the whole basin found 1.000. A gate that tests one point tests one point.
+- **A hypothesis was rejected on a badly-formed test.** Searching for
+  "beams through straits" looked for corridors that were *never* blocked and
+  found one, so the idea was dropped — but the real beams are blocked, just
+  further out than the point being lit. The test criterion, not the hypothesis,
+  was wrong. Re-derive the criterion before believing a negative result.
+
+**What the next attempt must be.** Not another per-ray model. Production
+spectral wave models propagate energy on a grid and suppress the flux across
+cells containing land — SWAN's obstacle transmission coefficients, and
+WAVEWATCH III's obstruction grids (Chawla & Tolman), where islands too small to
+resolve become a fractional transmission rather than a binary block. Every
+value is then a weighted average of a widening neighbourhood, so the field is
+smooth by construction and a hard boundary is not expressible. It also gives
+the user's own framing — *"land masses that swell will just dissipate on, and
+islands that will bend the swell"* — from one mechanism: lateral spread after
+travelling `L` is `sqrt(D·L)`, so a shadow of transverse width `W` refills
+after `L ≈ W²/4D`, quadratic in `W`, which separates an islet from a continent
+with no hand-classification. Note this also finally settles Panama, which broke
+rounds "15."–"17.": what blocks it is not its ~70 km along-ray thickness
+(indistinguishable from an islet) but the transverse span of the barrier it
+belongs to — measured at ~10,900 km from a Pacific source.
+
+**Two numbers a next attempt will need, both of which round "18." got wrong.**
+Max `rLead` across the full scrub range is **2.406 rad (15,332 km)**, not the
+~1.3 assumed — so capping a radial march at what packets reach saves about
+12% against π, not "half". And a water-route detour field must be computed as
+the difference of two runs of the *same* solver on the *same* grid: measured
+against the analytic great circle, a 1° grid reports a +246 km detour on an
+open-ocean control that should be zero (grid anisotropy), and its cell-centre
+sampling leaks straight through Central America. Mark a cell as land if *any*
+underlying mask texel is land.
+
+### [REVERTED — see "18b."] 18. The land-shadow model was wrong in kind, not in tuning — rewritten as a shadow
 
 **Reported by the user after rounds "15."-"17.":** *"in last two rounds we've
 been trying to 'stop' the swell when it hit landmass.. it didn't really work..
@@ -3316,7 +3416,7 @@ and `M9` 8.2% against 22%) or the colour ramp. Both are *look* decisions on a
 visual the user has spent seventeen rounds converging on, so neither was taken
 unilaterally. **Do not lower the threshold to make this pass.**
 
-### 17. Round "16." was still wrong — not the sampling, the destination grid
+### [REVERTED — see "18b."] 17. Round "16." was still wrong — not the sampling, the destination grid
 
 **Reported again, with a screenshot this time:** "still there look .. the
 swell is coming from left passing under central america and continuos

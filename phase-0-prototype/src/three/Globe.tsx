@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette, Noise, HueSaturation, BrightnessContrast, ToneMapping } from '@react-three/postprocessing';
@@ -9,7 +9,6 @@ import { latLonToVector3 } from './geo';
 import { detectQualityTier } from './qualityTier';
 import { buildSwellSources, resolveSwellSources } from '../data/swellSources';
 import { sourceWeightAt, type SwellSourceState, type Vec3 } from '../data/swellField';
-import type { ShadowMap } from './landOcclusion';
 import type { SwellPulse } from '../data/types';
 
 const RADIUS = 2;
@@ -155,17 +154,10 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
 
   const exposeMarker = useMemo(() => new URLSearchParams(window.location.search).has('e2e'), []);
 
-  // Reported by GlobeSphere once the land-mask image is decoded (see
-  // landOcclusion.ts) — null until then, which only matters in the window
-  // before the globe has rendered its first frame at all.
-  const [shadow, setShadow] = useState<ShadowMap | null>(null);
-
   /**
    * Which swell did that tap land on? Argmax of the field's own per-source
-   * weight at the tapped point, land-shadowed the same way the shader
-   * shadows it — otherwise a spot the shader now (correctly) renders as
-   * dark could still select a source that reads as strongest there by the
-   * unshadowed math, disagreeing with what's on screen.
+   * weight at the tapped point — the swell that is brightest under the
+   * finger wins, and open water clears the selection.
    */
   const handlePick = useCallback(
     (unit: Vector3) => {
@@ -173,7 +165,7 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
       let best = -1;
       let bestWeight = PICK_THRESHOLD;
       states.forEach((s, i) => {
-        const w = sourceWeightAt(s, p) * (shadow ? shadow.transmissionAt(i, p) : 1);
+        const w = sourceWeightAt(s, p);
         if (w > bestWeight) {
           bestWeight = w;
           best = i;
@@ -181,7 +173,7 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
       });
       onSelectSource(best);
     },
-    [states, shadow, onSelectSource],
+    [states, onSelectSource],
   );
 
   return (
@@ -203,12 +195,6 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
           offsetHours={offsetHours}
           selectedIndex={selectedIndex}
           onPick={handlePick}
-          // An object rather than the bare `isLand` function this used to
-          // pass: React's setState reads a function argument as a lazy
-          // updater (`fn(prevState)`) rather than the new state value, which
-          // crashed live inside `isLand(null)`. Reporting the baked map
-          // sidesteps that shape entirely.
-          onShadowReady={setShadow}
           octaves={quality.octaves}
         />
         {exposeMarker && <MarkerProbe state={states[0]} states={states} />}
