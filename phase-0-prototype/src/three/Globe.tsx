@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useMemo } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette, Noise, HueSaturation, BrightnessContrast, ToneMapping } from '@react-three/postprocessing';
@@ -9,6 +9,7 @@ import { latLonToVector3 } from './geo';
 import { detectQualityTier } from './qualityTier';
 import { buildSwellSources, resolveSwellSources } from '../data/swellSources';
 import { sourceWeightAt, type SwellSourceState, type Vec3 } from '../data/swellField';
+import type { ShadowAtlas } from './landOcclusion';
 import type { SwellPulse } from '../data/types';
 
 const RADIUS = 2;
@@ -159,13 +160,15 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
    * weight at the tapped point — the swell that is brightest under the
    * finger wins, and open water clears the selection.
    */
+  const [shadow, setShadow] = useState<ShadowAtlas | null>(null);
+
   const handlePick = useCallback(
     (unit: Vector3) => {
       const p: Vec3 = [unit.x, unit.y, unit.z];
       let best = -1;
       let bestWeight = PICK_THRESHOLD;
       states.forEach((s, i) => {
-        const w = sourceWeightAt(s, p);
+        const w = sourceWeightAt(s, p) * (shadow ? shadow.transmissionAt(i, p) : 1);
         if (w > bestWeight) {
           bestWeight = w;
           best = i;
@@ -173,7 +176,7 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
       });
       onSelectSource(best);
     },
-    [states, onSelectSource],
+    [states, shadow, onSelectSource],
   );
 
   return (
@@ -195,6 +198,7 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
           offsetHours={offsetHours}
           selectedIndex={selectedIndex}
           onPick={handlePick}
+          onShadowReady={setShadow}
           octaves={quality.octaves}
         />
         {exposeMarker && <MarkerProbe state={states[0]} states={states} />}

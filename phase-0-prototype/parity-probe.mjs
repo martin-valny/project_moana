@@ -36,7 +36,10 @@
  * than readback quantisation.
  */
 import { chromium } from 'playwright';
-import { SWELL_FIELD_GLSL, sourceWeightAt } from './src/data/swellField.ts';
+import fs from 'node:fs';
+import { PNG } from 'pngjs';
+import { SWELL_FIELD_GLSL, SWELL_SHADOW_GLSL, sourceFrame, sourceWeightAt } from './src/data/swellField.ts';
+import { buildShadowAtlas } from './src/three/landOcclusion.ts';
 import { buildHelenaPulse } from './src/data/helena.ts';
 import { buildSwellSources, resolveSwellSources } from './src/data/swellSources.ts';
 
@@ -413,4 +416,153 @@ void main() {
     process.exit(1);
   }
   console.log(`PASS  B2  noise sampling is isotropic — ratio ${ratio.toFixed(4)}, expected 1.0 +/- ${ISO_TOLERANCE}`);
+}
+
+// --- B3: the packed shadow atlas samples the same values on GPU as CPU ----
+//
+// Round 18 needed a heavier version of this gate because its shader
+// duplicated a 13-tap aperture sum that had to match a CPU implementation of
+// the same sum. This round's shader does no such duplication — the blur
+// happens once, on the CPU, into the atlas; the shader's only job is one
+// bilinear texture2D lookup at a computed (bearing, radius) coordinate. So
+// this gate is narrower by construction: it checks that packing the atlas,
+// uploading it with the app's own filter settings, and sampling it through
+// SWELL_SHADOW_GLSL's coordinate math reproduces the same value
+// shadowTransmissionAt() computes straight from the baked grid — i.e. that
+// nothing was lost or misaligned in the pack/upload/sample round trip.
+{
+  const SHADOW_TOLERANCE = 0.03;
+  const B3_FRAGMENT = `#version 300 es
+precision highp float;
+out vec4 fragColor;
+uniform vec3 uS;
+uniform vec3 uE1;
+uniform vec3 uE2;
+uniform vec3 uP;
+uniform float uBandV0;
+uniform float uBandV1;
+
+#define texture2D texture
+${SWELL_SHADOW_GLSL}
+
+void main() {
+  fragColor = vec4(moanaShadow(uBandV0, uBandV1, normalize(uS), uE1, uE2, normalize(uP)), 0.0, 0.0, 1.0);
+}`;
+
+  const maskPng = PNG.sync.read(fs.readFileSync('public/textures/earth-water.png'));
+  const isLand = (p) => {
+    const phi = Math.acos(Math.max(-1, Math.min(1, p[1])));
+    let u = Math.atan2(p[2], -p[0]) / (2 * Math.PI);
+    u = ((u % 1) + 1) % 1;
+    const px = Math.min(maskPng.width - 1, Math.floor(u * maskPng.width));
+    const py = Math.min(maskPng.height - 1, Math.floor((phi / Math.PI) * maskPng.height));
+    return maskPng.data[(py * maskPng.width + px) * 4] < 128;
+  };
+
+  const source = buildSwellSources(buildHelenaPulse(new Date('2026-08-24T12:00:00Z')))[2]; // kaimana, Pacific
+  const origin = [source.origin.x, source.origin.y, source.origin.z];
+  const { e1, e2 } = sourceFrame(origin);
+  const atlas = buildShadowAtlas([origin], [source.periodS], isLand);
+  const { v0, v1 } = atlas.bands[0];
+
+  const D2R = Math.PI / 180;
+  const ll = (lat, lon) => {
+    const phi = (90 - lat) * D2R;
+    const th = (lon + 180) * D2R;
+    return [-Math.sin(phi) * Math.cos(th), Math.cos(phi), Math.sin(phi) * Math.sin(th)];
+  };
+  const points = [
+    ['open S Pacific', ll(-30, -120)],
+    ['Pacific off Panama', ll(7, -80.5)],
+    ['Caribbean, behind C.America', ll(15, -75)],
+    ['Gulf of Mexico', ll(25, -90)],
+    ['mid N Atlantic', ll(40, -40)],
+    ['near the Central America coastline', ll(9, -84)],
+  ];
+
+  const atlasImage = atlas.texture.image;
+  const b3Browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
+  const b3Page = await b3Browser.newPage();
+  await b3Page.goto('about:blank');
+  const gpuShadow = await b3Page.evaluate(
+    ({ VERTEX, FRAGMENT, atlasData, atlasWidth, atlasHeight, cases }) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true });
+      const compile = (type, source) => {
+        const sh = gl.createShader(type);
+        gl.shaderSource(sh, source);
+        gl.compileShader(sh);
+        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+        return sh;
+      };
+      const prog = gl.createProgram();
+      gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERTEX));
+      gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAGMENT));
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+      gl.useProgram(prog);
+
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      const aPos = gl.getAttribLocation(prog, 'aPos');
+      gl.enableVertexAttribArray(aPos);
+      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+      // Same sampler state the app uses: LinearFilter, no mips, S repeats.
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, atlasWidth, atlasHeight, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array(atlasData));
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.uniform1i(gl.getUniformLocation(prog, 'uShadowAtlas'), 0);
+
+      const px = new Uint8Array(4);
+      return cases.map((c) => {
+        gl.uniform3fv(gl.getUniformLocation(prog, 'uS'), c.origin);
+        gl.uniform3fv(gl.getUniformLocation(prog, 'uE1'), c.e1);
+        gl.uniform3fv(gl.getUniformLocation(prog, 'uE2'), c.e2);
+        gl.uniform3fv(gl.getUniformLocation(prog, 'uP'), c.p);
+        gl.uniform1f(gl.getUniformLocation(prog, 'uBandV0'), c.v0);
+        gl.uniform1f(gl.getUniformLocation(prog, 'uBandV1'), c.v1);
+        gl.viewport(0, 0, 1, 1);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        return px[0] / 255;
+      });
+    },
+    {
+      VERTEX,
+      FRAGMENT: B3_FRAGMENT,
+      atlasData: Array.from(atlasImage.data),
+      atlasWidth: atlasImage.width,
+      atlasHeight: atlasImage.height,
+      cases: points.map(([, p]) => ({ origin, e1, e2, p, v0, v1 })),
+    },
+  );
+  await b3Browser.close();
+
+  let worst = 0;
+  console.log('');
+  points.forEach(([label, p], i) => {
+    const cpu = Math.min(atlas.transmissionAt(0, p), 0.9999);
+    const gpu = gpuShadow[i];
+    const delta = Math.abs(cpu - gpu);
+    worst = Math.max(worst, delta);
+    console.log(`  ${label.padEnd(34)} CPU ${cpu.toFixed(5)}  GPU ${gpu.toFixed(5)}  delta ${delta.toFixed(6)}`);
+  });
+  if (worst > SHADOW_TOLERANCE) {
+    console.error(
+      `FAIL  B3  packed shadow atlas disagrees between CPU and GPU sampling — worst delta ${worst.toFixed(5)}, ` +
+        `tolerance ${SHADOW_TOLERANCE}. The pack/upload/sample round trip has drifted.`,
+    );
+    process.exit(1);
+  }
+  console.log(
+    `PASS  B3  packed shadow atlas matches between CPU and GPU sampling — worst delta ${worst.toFixed(5)}, tolerance ${SHADOW_TOLERANCE}`,
+  );
 }

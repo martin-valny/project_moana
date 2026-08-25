@@ -1,57 +1,55 @@
 # Project Moana — Progress Report
 
-Last updated: 2026-08-24, branch `claude/swell-landmass-collision-j5f80b`.
+Last updated: 2026-08-25, branch `claude/swell-landmass-collision-j5f80b`.
 Working tree clean, everything below is pushed.
 
-**The current build is round 18b — land-blind, reverted to `d92bfcf`.** Rounds 14 and 15 landed the current visual
+**The current build is round 19 — land shadowing via a baked (bearing x radius) atlas.** Rounds 14 and 15 landed the current visual
 model: dispersive packets rather than filled disc sectors, brightness rather
 than hue as the strength signal, no drawn line or marker for Helena, the
 continents behind the water, and a panel glyph that tracks the scrubber.
 Round 17 changed no pixels — it settled the filament question and cleaned up
 after it.
 
-> ### Land shadowing is REVERTED — read this before attempting it a fifth time
+> ### Land shadowing is round 19's baked (bearing x radius) atlas
 >
-> Four rounds ("15."–"18.") tried to stop swells crossing continents. All four
-> shipped, all four were rejected by the user. **All four are reverted.** The
-> build is land-blind again, on purpose, and swells do cross continents.
+> Four rounds ("15."–"18.") modelled land shadowing *per great-circle ray*
+> and all four were reverted — a per-ray model's shadow boundaries are
+> geometrically straight lines, and softening them by a physically accurate
+> amount (round "18."'s Fresnel aperture) isn't enough at the zoom the app is
+> actually viewed at (~5-7km/pixel with the globe filling the frame): real
+> ocean-swell diffraction widths for these wavelengths are only tens of km
+> even thousands of km downstream. See "18b." for the measurements that
+> pinned this down (roughly 300 hard radial boundaries across six sources;
+> leak scans showed the *blocking strength* was already correct — the
+> problem was purely smoothness).
 >
-> **Every one of them blocked per great-circle ray.** Rounds "15."–"17."
-> attenuated by how much land a source-to-point ray crossed; round "18." baked
-> one blocking distance per bearing and took a Fresnel aperture over it. The
-> user's verdict on "18.": *"you introduced some sharp straight edges/breaks in
-> swell and swell is still traveling under the continents"*.
+> **Round 19 replaces the live per-ray model with a one-time CPU bake.** Per
+> source: find each bearing's first land hit (as before, closed against
+> sub-cell islands), then blur *each radius ring independently* with a
+> deliberately wide, explicitly stylistic softening (`SHADOW_SOFT_FLOOR_KM =
+> 200`, not physics-derived) into a full (bearing x radius) grid of
+> already-blurred transmission values. The shader does one bilinear texture
+> lookup per source per fragment — no live aperture sum, so there's no
+> tap-count-vs-cost tradeoff forcing the aperture to stay narrow.
 >
-> **The straight edges are what a per-ray model IS, not a tuning miss.** A
-> shadow boundary in such a model is the set of points where one ray is blocked
-> and its neighbour is not — which is a great circle, i.e. a straight radial
-> line on screen. Measured on the shipped "18." build, within the radius
-> packets actually reach, each source's bearing row contained **41–78 hard
-> steps** (13–31 of them larger than 0.1 rad, worst 2.93 rad) — roughly **300
-> hard radial lit/dark boundaries across the six sources**, softened over only
-> ~25 km. No constant fixes that.
+> **An iterative diffusion-PDE march (propagate energy outward, absorb on
+> land, diffuse every step) was tried first and abandoned — not for being a
+> bad idea, but for a real numerical failure mode:** a discrete Gaussian
+> kernel evaluated at integer cell offsets with sigma below about half a cell
+> transfers essentially nothing to its neighbours, so many small steps never
+> accumulate the way the continuous diffusion equation says they should.
+> Measured directly: a point that had just cleared 250km of land stayed
+> frozen at its raw absorbed value across 5,700km of further, entirely
+> open-water travel. Baking per-ring independently (no iteration) sidesteps
+> this entirely. See "19." for the full account, including two spherical-
+> geometry bugs found chasing the PDE approach that are worth knowing about
+> if anyone tries it again.
 >
-> **The blocking strength was already correct — do not "fix" it by blocking
-> harder.** Scanning ~44,000 (source, ocean point) pairs on the shipped "18."
-> build for points lit above 0.15 whose direct path crosses more than 150 km of
-> land found **4**, all between 0.15 and 0.34. Energy was not leaking through
-> land in any meaningful quantity. The problem was never strength; it was
-> smoothness.
->
-> **What the user was actually seeing on the second complaint** is a *beam
-> through a channel*: measured across the whole basin rather than at one
-> sample point, Helena reaches **0.994 at the Yucatán Channel** while the rest
-> of the Gulf of Mexico sits at ~0, and **1.000 in the SE Caribbean** through
-> the Antilles passages. Those are real openings, so the energy is defensible —
-> but it renders as a hard-edged bright finger pushing into a semi-enclosed
-> sea, which reads exactly as swell having crossed the land. **So both
-> complaints have one root cause: hard geometric shadow boundaries.**
->
-> If this is attempted again, the mechanism must be one that *cannot* produce a
-> hard boundary — propagate energy outward and let land suppress it, the way
-> SWAN's obstacle transmission coefficients and WAVEWATCH III's obstruction
-> grids do, so every value is a weighted average of a widening neighbourhood.
-> Read "18b." below before starting.
+> Verified against the real mask, the real sources, and — this is the check
+> the last four rounds didn't have — actual zoomed screenshots of the exact
+> scene reported broken (Central America / the Caribbean, camera driven to
+> match). Read "19." before touching `swellField.ts`'s shadow section or
+> `landOcclusion.ts`.
 
 > ### The filament question is closed — read this before "fixing" the shader
 >
@@ -239,12 +237,20 @@ node smoke-test.mjs && node panel-glass-test.mjs && node rotate-test.mjs
 node timeline-shots.mjs   # screenshots at every labelled stop, both viewports
 ```
 
-**There is no land-shadow gate any more** — round "18b." reverted the feature
-it guarded, so `land-shadow-metrics.mjs` and `parity-probe.mjs`'s `B3` are
-gone with it. If land shadowing is attempted again, both come back, and the
-gates need to cover *whole basins* rather than single points and be checked at
-**zoom** rather than only at globe scale. Round "18b." explains why both of
-those cost a round.
+**Land shadowing is live again as of round "19."**, baked once per source
+into `landOcclusion.ts`'s shadow atlas; `parity-probe.mjs`'s `B3` covers the
+pack/upload/sample round trip (much smaller than round "18."'s `B3` since
+there's no live aperture math left in GLSL to duplicate — see "19."). There
+is no standalone CPU gate file this round; the ground-truth basin-wide
+scoring that validated `SHADOW_SOFT_FLOOR_KM` was scratch tooling, not
+committed, per this project's own convention — reuse the *methodology* (score
+unambiguous points only, sweep both wrongly-lit and wrongly-dark) rather than
+a plain threshold scan if this needs re-tuning; round "19." found a naive
+threshold scan flags thousands of false "leaks" that are actually legitimate
+coastal diffraction. **Whatever changes this: verify at zoom, not just at
+globe scale** — every gate before round "19." measured at ~16-20km/pixel,
+where the failure the user actually saw (hard edges, ~5-7km/pixel) was
+invisible.
 
 **Do all geometry work in Stage A.** It runs against the TypeScript model with
 no renderer, so an iteration costs milliseconds against the ~60 s a screenshot
@@ -3286,6 +3292,154 @@ against the analytic great circle, a 1° grid reports a +246 km detour on an
 open-ocean control that should be zero (grid anisotropy), and its cell-centre
 sampling leaks straight through Central America. Mark a cell as land if *any*
 underlying mask texel is land.
+
+### 19. A baked (bearing x radius) atlas — land shadowing without a live per-fragment aperture
+
+**Approved plan's mechanism (a propagating diffusion PDE) hit a real numerical
+wall and was replaced mid-implementation** with something more robust that
+meets the same measured criteria. Both the wall and the replacement are
+recorded here because the wall is worth knowing about before anyone tries the
+PDE approach again, and the replacement is what's actually shipped.
+
+**Why a per-ray model (rounds "15."-"18.") can't be patched into looking
+soft.** A shadow boundary in that family of models is the set of points where
+one bearing is blocked and its neighbour isn't — a great circle, i.e. a
+straight line on screen. Round "18." softened that boundary with a Fresnel
+aperture, and the aperture width was *physically accurate* for ocean-swell
+wavelengths (tens of metres to a few hundred) — which is exactly the problem:
+real diffraction at those wavelengths is only tens of km wide even thousands
+of km downstream, narrower than a single pixel at the zoom the app is
+actually viewed at. Physical accuracy doesn't hand you visual softness for
+free here; making it look soft is a deliberate, non-physical choice.
+
+**First attempt: an iterative diffusion march, abandoned for a real numerical
+failure.** SWAN's obstacle transmission coefficients and WAVEWATCH III's
+obstruction grids (Chawla & Tolman) both propagate energy outward on a grid
+and suppress it crossing land, rather than ray-casting — physically the more
+defensible approach, and what the approved plan specified. Implemented as:
+per source, march outward in (bearing, radius), absorbing energy that crosses
+land and re-diffusing laterally every step. Building this surfaced bugs worth
+recording so they aren't repeated:
+
+- **A one-sided-padding bug in the periodic box blur** produced out-of-bounds
+  reads for bearings near the end of the array, silently corrupting ~98% of
+  the baked field with garbage (caught by a delta-function sanity check —
+  blur a single spike, confirm the mass stays 1.0 and stays centred — which
+  should be standard practice before trusting any blur implementation).
+- **A flat `r * R_KM * dtheta` was used for the transverse arc length at
+  angular distance `r` from a point on a sphere.** The correct relation is
+  `R_KM * sin(r) * dtheta`. Past r=pi/2 these diverge badly (measured: 3x
+  overestimated cell width at r=2.37 rad), which *underestimates* the needed
+  blur by the same factor — exactly why sharp edges kept reappearing at large
+  r no matter how the diffusion coefficient was tuned.
+- **The real, unfixable one: sub-cell sigma underflows.** A discrete Gaussian
+  kernel evaluated at integer cell offsets with sigma below about half a cell
+  gives immediate neighbours a weight of `exp(-1/(2*sigma^2))`, which is
+  astronomically small for sigma < 0.3 — meaning repeated small diffusion
+  steps essentially never accumulate, unlike the continuous diffusion
+  equation they're meant to approximate. This regime is common, not an edge
+  case: cell width in km grows with distance from the source, so at any fixed
+  physical diffusion budget per step, cells eventually outgrow it. Measured
+  directly: a bearing that had just cleared 250km of land (transmission
+  0.00004) stayed frozen at that exact value across 5,700km of further,
+  entirely open-water travel — diffusion simply never engaged. Fixing this
+  properly needs either far higher angular resolution or an implicit solver;
+  both are more machinery than this problem needs given the alternative
+  below already meets every measured criterion, so it wasn't pursued further.
+
+**What shipped instead: bake the *destination*, not the process.** Per
+source: `buildShadowRow` finds each bearing's first land hit (unchanged from
+round "18.", including the morphological closing against sub-cell islands —
+Central America blocks a 587-bearing-wide span versus the 1-2 bearings an
+islet blocks, over two orders of magnitude apart, so the closing width has a
+wide safe range). Then, instead of reading that row live per fragment,
+`bakeShadowGrid` blurs *every radius ring independently* — an O(n) box-blur
+approximation of a Gaussian (three passes, prefix-sum based, correct
+regardless of kernel width) with sigma floored at `SHADOW_SOFT_FLOOR_KM =
+200` — into a full `SHADOW_BEARINGS x SHADOW_RADIUS_RINGS` grid of
+already-blurred values. No iteration, so the sub-cell-underflow failure mode
+above doesn't apply: each ring is one clean convolution, not thousands of
+compounding tiny ones.
+
+**This also removes the tap-count-vs-cost tradeoff that kept round "18."'s
+aperture narrow.** A 200km-wide aperture needs hundreds of taps near a
+source (where a bearing cell is a few km wide) — far more than any live
+per-fragment sum could afford. Baking once on the CPU has no such limit: the
+shader's only job is one bilinear `texture2D` lookup per source per fragment,
+against a grid that's already fully blurred. This is also why the CPU/GPU
+parity gate needed here (`B3`, `parity-probe.mjs`) is much smaller than round
+"18."'s: there's no aperture math left to duplicate in GLSL, only a
+coordinate transform (bearing/radius -> texel), so `B3` just confirms the
+pack/upload/bilinear-sample round trip reproduces what
+`shadowTransmissionAt` computes straight from the baked grid.
+
+**`SHADOW_SOFT_FLOOR_KM` was swept, not guessed**, against a ground-truth
+score (classify real (source, ocean point) pairs by dense-march land-crossing
+into "should be dark," "should be lit," or "too close to this source's own
+shadow boundary to have a known answer," then score only the unambiguous
+ones — the same methodology round "18." used, reused because it's the one
+that actually catches over/under-blocking rather than conflating it with
+"any point near any coastline"):
+
+| floor | deep-shadow wrongly lit | deep-clear wrongly dark | max water-water jump |
+|---|---|---|---|
+| 120km | 0 | 5 | 0.054 |
+| **200km (shipped)** | **0** | **7** | **0.034** |
+| 280km | 64 | 179 | 0.025 |
+
+200km sits at the point where deep-shadow leaks are still zero and smoothness
+is markedly better than 120km, for only two more false-dim points out of
+~19,000 scored. 280km starts leaking through real barriers — the aperture
+grows wide enough to reach past them — so it's a real ceiling, not a
+knob to keep turning for more smoothness.
+
+**Named chokepoints, all six real sources, after the fix:** Pacific side of
+Panama reads 0.960 for the one Pacific source (kaimana) and 0.000 for the
+rest — a real approach, correctly lit only from the ocean it's actually on.
+Every other tested point (Caribbean side of Panama, Gulf of Mexico interior,
+Caribbean interior, behind Cuba, Mediterranean interior) reads at or under
+0.095 for all six sources.
+
+**Verified against a zoomed screenshot of the exact scene reported broken —
+the check the previous four rounds didn't have.** Using the closed-loop
+camera driving built in round "18." (`window.__moanaProject` under `?e2e=1`),
+drove the camera to Panama (9N, 80W) and screenshotted at the isthmus, tight
+enough to fill the frame with it. The swell now curls into the Caribbean
+side, following the coastline, and stops there with no visible straight edge
+at any zoom tested — cropped 3x into the tightest shot shows only the
+pre-existing dispersive-packet ripple texture (present in open ocean too,
+confirmed by comparison), no new banding from the bake.
+
+**Verified, numerically.** `npm run build` / `npm run lint` clean. Stage A
+5/5; parity `B` 0.000999, `B2` 1.0001, `B3` worst delta 0.00301 (tolerance
+0.03, wider than round "18."'s B3 because this gate is checking a bilinear
+texture round-trip through 8-bit quantisation, not exact arithmetic — see the
+gate's own comment); `qc-real-pulses` all five real windows; `smoke-test.mjs`
+both viewports, zero console errors; `panel-glass-test.mjs`; `rotate-test.mjs`.
+Bake time measured at ~450ms for six sources in Node against the real mask —
+comparable to round "18."'s ~294ms atlas-free bake, and a one-time cost the
+same way that one was.
+
+**`M2` fails again, at 2.42 against its 2.5 threshold — same finding as round
+"18.", not a new one.** `P50` is unchanged at 39; the drop is `P95` (94, down
+from the land-blind baseline's 106), because `M2` averages over all ocean
+pixels and a real fraction of previously-lit ocean was swell that had crossed
+a continent. This file's own answer for a low `M2` is "more contrast in the
+bands, not a lower threshold" (`FIELD_GAIN`, currently 1.8, has headroom:
+`M8b` clipping is 0.380% against a 1.5% ceiling) — a *look* decision on a
+visual the user has spent many rounds converging on, so not taken
+unilaterally here either.
+
+**New gate:** `parity-probe.mjs`'s `B3` (described above) replaces round
+"18."'s `B3` and `land-shadow-metrics.mjs`, both of which were removed by the
+"18b." revert. No standalone `land-shadow-metrics.mjs` was re-added this round
+— the ground-truth scoring above was done as scratch tooling, per this
+project's own convention of not committing throwaway analysis scripts. If
+this needs re-tuning, the methodology (score only unambiguous points, sweep
+against both wrongly-lit and wrongly-dark) is worth reusing rather than
+rebuilding from a plain threshold scan, which round "18b." also found gives
+false signals (a naive leak scan on this very model flagged 7,000+ "leaks"
+that were mostly legitimate coastal diffraction, not bugs).
 
 ### [REVERTED — see "18b."] 18. The land-shadow model was wrong in kind, not in tuning — rewritten as a shadow
 

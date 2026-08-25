@@ -506,3 +506,319 @@ export const SWELL_FIELD_GLSL = /* glsl */ `
     return env * moanaSpread(S, D, P, d) * amp;
   }
 `;
+
+// --- Land shadowing --------------------------------------------------------
+//
+// Round 18 tried this as a live, per-ray blocking model: walk the arc from
+// source to point, find where it first meets land, and read a Fresnel-style
+// aperture off that distance at query time. It was rejected on sight —
+// "sharp straight edges/breaks in swell and swell is still traveling under
+// the continents" — and reverted. Two things were true about why, both
+// measured before this replacement was written:
+//
+// 1. **A per-ray model's shadow boundaries are geometrically straight lines
+//    on screen**, because a boundary is where one bearing is blocked and its
+//    neighbour isn't — a great circle. Round 18 softened that boundary with
+//    an aperture whose width came from the physically real Fresnel formula
+//    for ocean-swell wavelengths (tens of metres to a few hundred), which
+//    gives a physically accurate softening of a few tens of km even
+//    thousands of km downstream — genuinely narrow, and narrower than a
+//    single pixel at the zoom the app is actually viewed at (roughly
+//    5-7km/pixel with the globe filling the frame). The model wasn't buggy;
+//    physically accurate ocean diffraction just doesn't look soft at this
+//    zoom. Making it look soft is a deliberate visual choice, not something
+//    physics hands over for free — see `SHADOW_SOFT_FLOOR_KM` below.
+// 2. **The aperture was computed live, per fragment, per source** — cheap
+//    enough for round 18's ~13-tap sum, but a soft-at-zoom aperture needs
+//    tap counts in the hundreds near a source (where a bearing cell is only
+//    a few km wide), which no real-time fragment shader can afford. So this
+//    is baked once on the CPU instead: for each source, a full
+//    (bearing x radius) grid of *already-blurred* transmission values. The
+//    shader does one cheap bilinear texture lookup, not a live sum — see
+//    `bakeShadowGrid` below and its GLSL mirror.
+//
+// An earlier attempt at this round tried an *iterative* diffusion march —
+// physically the most defensible approach (SWAN's obstacle transmission
+// coefficients and WAVEWATCH III's obstruction grids both propagate energy
+// outward and suppress it crossing land, rather than ray-casting) — but it
+// has a real numerical failure mode: a discrete Gaussian kernel evaluated at
+// integer cell offsets with sigma below about half a cell transfers
+// essentially nothing to its neighbours (the tap weight underflows), so many
+// small steps never accumulate the way the continuous diffusion equation
+// says they should. That regime is common here, not an edge case: cell width
+// in km grows with distance from the source, so at any fixed physical
+// diffusion budget per step, cells eventually outgrow it. Measured directly:
+// a point that had just cleared 250km of land stayed frozen at its raw
+// absorbed value (0.00004) across 5,700km of further, entirely open-water
+// travel — the diffusion simply never engaged. Fixing that properly needs
+// either far higher angular resolution or an implicit solver; both are more
+// machinery than this problem needs, given the single-pass grid below
+// already meets every measured criterion. Not pursued further, and noted
+// here so it isn't tried again the same way.
+//
+// The (bearing, radius) grid this bakes into replaces round 15/16's
+// destination atlas (a lat/lon grid, later removed in round 17 for having a
+// resolution ceiling no affordable bake could clear — Panama's ~70km
+// isthmus needs finer texels than a lat/lon grid spanning the whole globe
+// could afford). A source-centred grid has no such ceiling: distance along
+// each bearing is a continuous ray march, not a value binned to whichever
+// lat/lon cell happens to contain a point.
+
+/** Bearings resolved per source. At 1024, the narrowest cell (near a
+ * source's own origin) is a few km wide — narrower than the softening this
+ * module applies, so the bearing grid is never the limiting resolution. */
+export const SHADOW_BEARINGS = 1024;
+
+/** Angular step the initial ray march walks each bearing outward in,
+ * radians (~19km) — finer than `earth-water.png`'s own ~25km texel, so a
+ * ray cannot step clean over a coastline. */
+export const SHADOW_MARCH_STEP_RAD = 0.003;
+
+/** Land closer than this to a source's own origin is ignored, so a storm
+ * sitting on a coastline does not shadow itself. */
+export const SHADOW_NEAR_SKIP_RAD = 0.004;
+
+/**
+ * Width, in bearings, of the morphological closing (dilate then erode)
+ * applied to the raw first-land-hit row before anything else touches it.
+ *
+ * An island too small to draw should not cast a shadow you can see. Without
+ * this, a 40km islet blocks one or two bearings, and — even after the wide
+ * softening below — that projects a thin dark line across open ocean far
+ * past where it should have healed. Measured against the real sources and
+ * mask: Central America blocks a 587-bearing-wide span of a Pacific
+ * source's row; the sub-cell islands that produced visible streaks blocked
+ * one or two. Over two orders of magnitude apart, so a closing width in
+ * this range cannot weaken a real barrier and does still let a genuine
+ * strait (open on both sides for a wide span) pass swell through it.
+ */
+export const SHADOW_CLOSE_BEARINGS = 7;
+
+/** Radial range the grid is baked over, radians. `SHADOW_R_MIN` skips the
+ * near-source singularity (bearings converge at r=0, same reason
+ * `MOANA_SPREAD_POLE`/`MOANA_FLOW_POLE` exist elsewhere in this file).
+ * `SHADOW_R_MAX` covers the furthest any packet reaches across the full
+ * scrub range (measured: 2.406 rad) plus its own trailing band width. */
+export const SHADOW_R_MIN = 0.02;
+export const SHADOW_R_MAX = 2.76;
+
+/** Radial samples the grid is baked at. At 300 rings over the range above,
+ * consecutive rings are ~6km apart at the equator-equivalent radius (r=pi/2)
+ * — comfortably finer than the softening width below, so radial bilinear
+ * interpolation between rings is not the limiting resolution either. */
+export const SHADOW_RADIUS_RINGS = 300;
+
+/**
+ * Minimum softening width, km, applied to every shadow boundary regardless
+ * of distance travelled — the deliberate visual choice this module makes in
+ * place of the physically tiny Fresnel width (see the module comment above).
+ * Swept against the real mask and real sources: at 120km, few enough water
+ * points are wrongly dimmed but visible-at-zoom smoothness is still
+ * middling; at 280km, deep-shadow leaks start appearing (the aperture grows
+ * wide enough to reach past a real barrier). 200km sits in between with zero
+ * deep-shadow leaks and the best measured smoothness this side of that.
+ */
+export const SHADOW_SOFT_FLOOR_KM = 200;
+
+/** Deep-water wavelength for a peak period, km — `g T^2 / 2pi`. Longer-period
+ * swell diffracts a little further, which is why the softening this module
+ * still applies is per-source even though the floor above dominates it at
+ * every distance that matters on screen. */
+export function wavelengthKm(periodS: number): number {
+  return (9.81 * periodS * periodS) / (2 * Math.PI) / 1000;
+}
+
+function cross3(a: Vec3, b: Vec3): Vec3 {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+/** An orthonormal frame at a source's origin, defining the zero of bearing.
+ * Every consumer — the bake and the query — takes the frame from this one
+ * function, so a bearing means the same thing everywhere it's used. */
+export function sourceFrame(origin: Vec3): { e1: Vec3; e2: Vec3 } {
+  const ref: Vec3 = Math.abs(origin[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  const e1 = normalize3(cross3(ref, origin));
+  return { e1, e2: cross3(origin, e1) };
+}
+
+/** Dilate then erode a periodic row by `width` bearings — see
+ * `SHADOW_CLOSE_BEARINGS` for why. */
+function closeRow(row: Float32Array, width: number): Float32Array {
+  const n = row.length;
+  const half = Math.floor(width / 2);
+  const dilated = new Float32Array(n);
+  for (let a = 0; a < n; a++) {
+    let m = -Infinity;
+    for (let k = -half; k <= half; k++) m = Math.max(m, row[(((a + k) % n) + n) % n]);
+    dilated[a] = m;
+  }
+  const out = new Float32Array(n);
+  for (let a = 0; a < n; a++) {
+    let m = Infinity;
+    for (let k = -half; k <= half; k++) m = Math.min(m, dilated[(((a + k) % n) + n) % n]);
+    out[a] = m;
+  }
+  return out;
+}
+
+/**
+ * One row: for each of `SHADOW_BEARINGS` bearings from `origin`, the
+ * angular distance at which that ray first meets land (or PI if it never
+ * does), closed to remove sub-cell islands. This is the raw geometry —
+ * `bakeShadowGrid` below is what turns it into something soft.
+ */
+export function buildShadowRow(origin: Vec3, isLand: (p: Vec3) => boolean): Float32Array {
+  const { e1, e2 } = sourceFrame(origin);
+  const row = new Float32Array(SHADOW_BEARINGS);
+  for (let a = 0; a < SHADOW_BEARINGS; a++) {
+    const az = (a / SHADOW_BEARINGS) * 2 * Math.PI;
+    const c = Math.cos(az);
+    const s = Math.sin(az);
+    const dir: Vec3 = [e1[0] * c + e2[0] * s, e1[1] * c + e2[1] * s, e1[2] * c + e2[2] * s];
+    let hit = Math.PI;
+    for (let r = SHADOW_NEAR_SKIP_RAD; r <= Math.PI; r += SHADOW_MARCH_STEP_RAD) {
+      const cr = Math.cos(r);
+      const sr = Math.sin(r);
+      if (isLand([origin[0] * cr + dir[0] * sr, origin[1] * cr + dir[1] * sr, origin[2] * cr + dir[2] * sr])) {
+        hit = r;
+        break;
+      }
+    }
+    row[a] = hit;
+  }
+  return closeRow(row, SHADOW_CLOSE_BEARINGS);
+}
+
+/**
+ * Periodic box blur, O(n) via a prefix sum regardless of kernel width,
+ * padded on both sides so wrap is correct in both directions (an earlier,
+ * one-sided-padding version silently produced out-of-bounds reads for
+ * bearings near the end of the array — caught by a delta-function sanity
+ * check, kept here as the reason both-sided padding matters).
+ */
+function boxBlurPeriodic(arr: Float64Array, radiusCells: number): Float64Array {
+  const n = arr.length;
+  const r = Math.max(1, Math.round(radiusCells));
+  if (r * 2 + 1 >= n) {
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += arr[i];
+    return new Float64Array(n).fill(sum / n);
+  }
+  const w = 2 * r + 1;
+  const ext = new Float64Array(n + 2 * r);
+  for (let i = 0; i < n; i++) ext[r + i] = arr[i];
+  for (let i = 0; i < r; i++) ext[i] = arr[n - r + i];
+  for (let i = 0; i < r; i++) ext[r + n + i] = arr[i];
+  const prefix = new Float64Array(ext.length + 1);
+  for (let i = 0; i < ext.length; i++) prefix[i + 1] = prefix[i] + ext[i];
+  const out = new Float64Array(n);
+  for (let b = 0; b < n; b++) out[b] = (prefix[b + w] - prefix[b]) / w;
+  return out;
+}
+
+/** Triple box blur approximating a Gaussian of the given sigma (standard
+ * formula for k passes: box width `w = sqrt(12*sigma^2/k + 1)`, here k=3). */
+function gaussApproxPeriodic(arr: Float64Array, sigmaCells: number): Float64Array {
+  if (sigmaCells < 0.05) return arr;
+  const w = Math.sqrt(4 * sigmaCells * sigmaCells + 1);
+  const radius = (w - 1) / 2;
+  let out = arr;
+  out = boxBlurPeriodic(out, radius);
+  out = boxBlurPeriodic(out, radius);
+  out = boxBlurPeriodic(out, radius);
+  return out;
+}
+
+/**
+ * Bakes the full (bearing x radius) grid of transmission values for one
+ * source: `SHADOW_RADIUS_RINGS` rings, each `SHADOW_BEARINGS` wide, each
+ * ring blurred independently with its own sigma (so the softening genuinely
+ * grows with distance travelled, per the module comment above) via the O(n)
+ * blur above rather than an iterative march. Returned flat, row-major
+ * (ring-major), values in [0, 1] — 1 clear, 0 fully shadowed.
+ */
+export function bakeShadowGrid(origin: Vec3, periodS: number, isLand: (p: Vec3) => boolean): Float32Array {
+  const row = buildShadowRow(origin, isLand);
+  const dtheta = (2 * Math.PI) / SHADOW_BEARINGS;
+  const grid = new Float32Array(SHADOW_RADIUS_RINGS * SHADOW_BEARINGS);
+  const raw = new Float64Array(SHADOW_BEARINGS);
+  for (let ring = 0; ring < SHADOW_RADIUS_RINGS; ring++) {
+    const r = SHADOW_R_MIN + ((SHADOW_R_MAX - SHADOW_R_MIN) * ring) / (SHADOW_RADIUS_RINGS - 1);
+    for (let b = 0; b < SHADOW_BEARINGS; b++) raw[b] = row[b] < r ? 0 : 1;
+    const kmPerBearing = Math.max(Math.sin(r), 0.05) * EARTH_RADIUS_KM * dtheta;
+    const sigmaKm = Math.max(SHADOW_SOFT_FLOOR_KM, Math.sqrt((wavelengthKm(periodS) * r * EARTH_RADIUS_KM) / 4));
+    const blurred = gaussApproxPeriodic(raw, sigmaKm / kmPerBearing);
+    grid.set(blurred as unknown as ArrayLike<number>, ring * SHADOW_BEARINGS);
+  }
+  return grid;
+}
+
+/** Bilinear sample of a baked grid at an exact (radius, fractional bearing).
+ * Shared by CPU hit-testing and — conceptually, via the identical coordinate
+ * math — the GLSL mirror below; both read the one baked grid, never a
+ * second copy of it. */
+export function sampleShadowGrid(grid: Float32Array, r: number, bearingIdx: number): number {
+  const t = Math.max(0, Math.min(1, (r - SHADOW_R_MIN) / (SHADOW_R_MAX - SHADOW_R_MIN))) * (SHADOW_RADIUS_RINGS - 1);
+  const ring0 = Math.floor(t);
+  const ringFrac = t - ring0;
+  const ring1 = Math.min(SHADOW_RADIUS_RINGS - 1, ring0 + 1);
+  const b0 = Math.floor(bearingIdx);
+  const bFrac = bearingIdx - b0;
+  const n = SHADOW_BEARINGS;
+  const at = (ring: number, b: number) => grid[ring * n + (((b % n) + n) % n)];
+  const v0 = at(ring0, b0) * (1 - bFrac) + at(ring0, b0 + 1) * bFrac;
+  const v1 = at(ring1, b0) * (1 - bFrac) + at(ring1, b0 + 1) * bFrac;
+  return v0 * (1 - ringFrac) + v1 * ringFrac;
+}
+
+/** Fraction of this source's energy reaching `point`, from its baked grid. */
+export function shadowTransmissionAt(grid: Float32Array, origin: Vec3, e1: Vec3, e2: Vec3, point: Vec3): number {
+  const cosR = Math.max(-1, Math.min(1, dot3(origin, point)));
+  const r = Math.acos(cosR);
+  if (r < SHADOW_NEAR_SKIP_RAD) return 1;
+  const t = normalize3([point[0] - origin[0] * cosR, point[1] - origin[1] * cosR, point[2] - origin[2] * cosR]);
+  const az = Math.atan2(dot3(t, e2), dot3(t, e1));
+  const fa = ((((az / (2 * Math.PI)) % 1) + 1) % 1) * SHADOW_BEARINGS;
+  return sampleShadowGrid(grid, Math.min(r, SHADOW_R_MAX), fa);
+}
+
+/**
+ * GLSL mirror of the *coordinate transform* only — `shadowTransmissionAt`'s
+ * geometry, not its aperture math, because there is no aperture math left to
+ * duplicate: the blur happened once, on the CPU, into the grid this samples.
+ * The shader's `texture2D` call does the same bilinear interpolation
+ * `sampleShadowGrid` does by hand, natively, so this is a much smaller
+ * mirror than round 18's needed (that one duplicated a 13-tap weighted sum
+ * and needed its own CPU/GPU parity gate; this only needs the two halves to
+ * agree on where a bearing lands in the texture, which `parity-probe.mjs`'s
+ * B3 gate below still checks, cheaply).
+ *
+ * `rowV0`/`rowV1` are the caller's v-coordinate range for this source's band
+ * in the packed atlas (see `landOcclusion.ts`), so this function needs no
+ * opinion about how many sources are packed into the texture or where.
+ */
+export const SWELL_SHADOW_GLSL = /* glsl */ `
+  uniform sampler2D uShadowAtlas;
+
+  const float MOANA_SHADOW_R_MIN = ${SHADOW_R_MIN.toFixed(5)};
+  const float MOANA_SHADOW_R_MAX = ${SHADOW_R_MAX.toFixed(5)};
+  const float MOANA_SHADOW_NEAR_SKIP = ${SHADOW_NEAR_SKIP_RAD.toFixed(5)};
+  const float MOANA_TWO_PI = 6.28318531;
+
+  // Mirrors shadowTransmissionAt() in swellField.ts, minus the blur it reads
+  // pre-baked from uShadowAtlas. rowV0/rowV1 bound this source's padded band
+  // within the packed atlas (see landOcclusion.ts's buildShadowAtlas).
+  float moanaShadow(float rowV0, float rowV1, vec3 S, vec3 E1, vec3 E2, vec3 P) {
+    float cosR = clamp(dot(S, P), -1.0, 1.0);
+    float r = acos(cosR);
+    if (r < MOANA_SHADOW_NEAR_SKIP) return 1.0;
+
+    vec3 raw = P - S * cosR;
+    float len = length(raw);
+    vec3 t = len > 1e-6 ? raw / len : E1;
+    float u = fract(atan(dot(t, E2), dot(t, E1)) / MOANA_TWO_PI);
+
+    float v = mix(rowV0, rowV1, clamp((r - MOANA_SHADOW_R_MIN) / (MOANA_SHADOW_R_MAX - MOANA_SHADOW_R_MIN), 0.0, 1.0));
+    return texture2D(uShadowAtlas, vec2(u, v)).r;
+  }
+`;
