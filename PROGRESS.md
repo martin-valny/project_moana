@@ -3,15 +3,30 @@
 Last updated: 2026-08-25, branch `claude/swell-landmass-collision-j5f80b`.
 Working tree clean, everything below is pushed.
 
-**The current build is round 21 — the globe's land texture was rendering
-north/south-mirrored since round 7, now fixed, on top of round 20's
-contrast-power lever for enclosed seas.** Rounds 14 and 15 landed the
-current visual model: dispersive packets rather than filled disc sectors,
-brightness rather than hue as the strength signal, no drawn line or marker
-for Helena, the continents behind the water, and a panel glyph that tracks
-the scrubber. Round 17 changed no pixels — it settled the filament question
-and cleaned up after it.
+**The current build is round 22 — a lattice-aligned noise-drift bug that
+banded the ocean's texture after a few idle minutes, fixed on top of
+round 21's land-texture mirror fix and round 20's contrast-power lever for
+enclosed seas.** Rounds 14 and 15 landed the current visual model:
+dispersive packets rather than filled disc sectors, brightness rather than
+hue as the strength signal, no drawn line or marker for Helena, the
+continents behind the water, and a panel glyph that tracks the scrubber.
+Round 17 changed no pixels — it settled the filament question and cleaned
+up after it.
 
+> ### Left running, the ocean used to band into contour lines — read "22." before touching the noise's time terms
+>
+> Any `vec3(scalar)` fed into this shader's simplex-noise coordinates is
+> suspect: broadcasting one value to all three axes drives that offset
+> dead along `(1,1,1)`, which is a degenerate direction for the
+> Ashima/Gustavson noise this project uses — the cell-skew step treats it
+> specially, so moving along it re-hashes the same relative corner of each
+> lattice cell instead of sampling independently, and the field stops
+> looking random. The ocean's "slow independent evolution" term did exactly
+> this with `uTime`, and it only took a couple of minutes of idle real time
+> to become visible as parallel banding across the swell. Fixed by giving
+> the three axes different rates instead of one shared scalar. See "22."
+> for the direct before/after A/B that confirmed both the bug and the fix.
+>
 > ### The land texture was mirrored north/south — read "21." before trusting any screenshot of this app
 >
 > `THREE.Texture.flipY` defaults to `true` and nothing in `GlobeSphere.tsx`
@@ -3694,6 +3709,88 @@ model change, so nothing about `parity-probe.mjs`'s `B3` or the shadow atlas
 needed touching. `check-drift.mjs`, `verify-geo.mjs`, `shot-panama-swell.mjs`,
 `mark.mjs`, and `crop.mjs` were scratch tooling for this investigation,
 deleted after, per this project's convention.
+
+### 22. Smooth swell turned into banded contour lines after a few minutes idle — a lattice-aligned noise drift
+
+**Reported with a screenshot:** left running untouched for "even just a few
+minutes," the ocean's marbled swell texture developed distinct, thin,
+roughly-parallel contour lines instead of staying a smooth gradient. Not a
+land-shadow issue, not a geometry issue — this is the domain-warped fBm
+noise that paints the water's flowing texture (`GlobeSphere.tsx`, the
+`SURFACE_FRAGMENT` shader), unrelated to rounds 15-21.
+
+**Root cause: the animation's time-driven offset moves exactly along
+simplex noise's one degenerate direction.** The noise's "slow independent
+evolution" term was:
+
+```glsl
+vec3 evolve = f * 0.15 * dirConfidence + vec3(uTime * 0.009);
+```
+
+`vec3(uTime * 0.009)` broadcasts the *same* scalar to all three axes —
+every fragment on the globe, identically, drifts in a dead-straight line
+along the `(1,1,1)` direction as `uTime` (seconds since page load) grows.
+That direction is not neutral for the simplex noise implementation this
+project uses (`shaders/noise.ts`, standard Ashima/Gustavson): its cell-skew
+step (`i = floor(v + dot(v, vec3(1/3)))`) treats `(1,1,1)` as a special
+axis — moving along it shifts which lattice cell a sample falls in
+*without changing where in the cell it falls*, so successive samples along
+that line keep re-hashing the same relative corner instead of landing on
+independent pseudo-random values. The result reads as correlated banding,
+not noise. This is a documented caveat of this noise family (animate along
+the lattice diagonal and the grid shows through) — not a bug in the
+Ashima/Gustavson code, a bug in how this shader drove it.
+
+**Why "even just a few minutes" and not hours:** this is a *direction*
+problem, not a magnitude/precision one (round "21." briefly considered and
+ruled out a float32-precision hypothesis for the same reason — the numbers
+involved after a few minutes are nowhere near where float32 struggles).
+Any accumulated drift that is a non-trivial fraction of one noise cell
+along the exact diagonal is enough to expose the correlation; at
+`uTime * 0.009` that only takes on the order of a minute or two.
+
+**Confirmed by direct A/B, not just code reading.** Loaded the app, took a
+screenshot, waited 3 minutes untouched (`reducedMotion: 'reduce'` so the
+camera doesn't drift, isolating the ocean animation itself), screenshotted
+again, and cropped into the swell band both times:
+- **Old code:** smooth and marbled at t=0; by t=180s a young, freshly
+  spawned packet already shows a faint seam, and a mature ("3 Days") packet
+  with a long-travelled ribbon shows clearly, unambiguously banded parallel
+  contour lines running along its length and coastward edge — a direct
+  match for the screenshot.
+- **Fixed code, identical scenario:** the mature ribbon at t=180s is back
+  to soft marbled gradients, materially indistinguishable from its own
+  t=0 frame. The A/B was done by `git stash`-ing the fix to get a clean
+  before/after on the same commit, not by comparing across unrelated runs.
+
+**Fix:** give the three axes different, non-integer-ratio rates instead of
+one shared scalar, so the drift direction is off the lattice diagonal —
+same speed as before (`vec3(0.0091, 0.0069, 0.0113)` has almost the same
+magnitude as the old `vec3(0.009)`), just not degenerate:
+
+```glsl
+vec3 evolve = f * 0.15 * dirConfidence + vec3(uTime * 0.0091, uTime * 0.0069, uTime * 0.0113);
+```
+
+Two lines changed, both in `GlobeSphere.tsx`.
+
+**Verified.** `npm run build` / `npm run lint` clean. Parity `B` 0.000999,
+`B2` 1.0001, `B3` worst delta 0.00333 — all unchanged from round "21.",
+expected since this only touches the ocean's decorative noise phase, not
+land shadowing or the noise's isotropy fade. `qc-real-pulses.mjs` all five
+real windows. Stage A 5/5. Stage C 8/9 — `M2` 2.65 (still passing, same
+ballpark as "21."'s 2.70), `M10` still fails at 0.171 (same pre-existing,
+already-documented finding from "21.", not something this round touched or
+could have moved — land colour is untouched here). `smoke-test.mjs` both
+viewports, zero console errors; `panel-glass-test.mjs`; `rotate-test.mjs`.
+
+No new gate added — this was verified by direct visual A/B (see above)
+rather than a numeric threshold, because the defect is about the
+*correlation structure* of a noise field over time, which the existing
+gates (calibrated on short-lived Playwright sessions, seconds not minutes
+of `uTime`) were never positioned to catch. Worth knowing if this class of
+bug recurs: any `vec3(scalar)` fed into this noise family's coordinate is
+suspect, not just time-driven ones.
 
 ### [REVERTED — see "18b."] 18. The land-shadow model was wrong in kind, not in tuning — rewritten as a shadow
 

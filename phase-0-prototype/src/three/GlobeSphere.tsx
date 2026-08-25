@@ -389,7 +389,20 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // speed is what real swell looks like — and it keeps a fast scrub from
       // reading as the texture racing.
       coord += f * (uTime * 0.025 + uScrubHours * 0.004) * dirConfidence;
-      vec3 evolve = f * 0.15 * dirConfidence + vec3(uTime * 0.009);
+      // vec3(uTime * k) for a single k broadcasts the identical value to
+      // all three axes, which drives this offset dead along the (1,1,1)
+      // direction forever. That direction is not neutral for the simplex
+      // noise below (noise.ts): its cell-skew step folds v through
+      // dot(v, vec3(1/3)), so moving along (1,1,1) shifts which lattice
+      // cell a sample falls in without changing its position inside the
+      // cell — every step re-hashes the same relative corner, and after
+      // enough of that the field stops looking pseudo-random and reads as
+      // correlated bands. Left alone this took only a couple of minutes to
+      // become visible (reported: smooth swell "turns into more distinct
+      // structure with visible non-gradient lines" when left running).
+      // Different, non-integer-ratio rates per axis keep the drift off that
+      // diagonal, at the same speed as before.
+      vec3 evolve = f * 0.15 * dirConfidence + vec3(uTime * 0.0091, uTime * 0.0069, uTime * 0.0113);
 
       // Moderate warp: enough for gentle S-curves and feathering, not so
       // much that it curls the streaks back into noodles. Round 7: octave
