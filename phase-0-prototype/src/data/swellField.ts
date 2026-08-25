@@ -612,13 +612,64 @@ export const SHADOW_RADIUS_RINGS = 300;
  * Minimum softening width, km, applied to every shadow boundary regardless
  * of distance travelled — the deliberate visual choice this module makes in
  * place of the physically tiny Fresnel width (see the module comment above).
- * Swept against the real mask and real sources: at 120km, few enough water
- * points are wrongly dimmed but visible-at-zoom smoothness is still
- * middling; at 280km, deep-shadow leaks start appearing (the aperture grows
- * wide enough to reach past a real barrier). 200km sits in between with zero
- * deep-shadow leaks and the best measured smoothness this side of that.
+ *
+ * First shipped at 200km, which the ground-truth score (below) validated —
+ * zero deep-shadow leaks, and the best measured smoothness of the values
+ * tried. It was still wrong: at 200km the aperture is wide enough that an
+ * enclosed sea only a few hundred km across (the Gulf of Honduras, the
+ * approach to the Gulf of Mexico) reads as almost uniformly lit rather than
+ * "bright at the opening, dark toward the interior" — reported back as
+ * "still running under Central America" even though every scored point and
+ * every named chokepoint was numerically correct. The ground-truth score
+ * cannot see this: it classifies points as right/wrong by whether they
+ * cross a threshold, not by how the *gradient across an enclosed body of
+ * water* reads once the swell's own brightness and the app's bloom pass are
+ * layered on top.
+ *
+ * The first fix tried was narrowing this constant (to 80km) — that genuinely
+ * changes the baked values (measured: 52% of pixels differ from the 200km
+ * bake), but a screenshot of the same scene barely looked different, because
+ * a moderately-dimmed pixel multiplied by a swell packet's own brightness
+ * and pushed through the app's bloom pass still reads as "lit" to the eye.
+ * Width alone was the wrong lever: it controls *how far a boundary is
+ * softened*, not *how dark a partially-transmitting point looks*, and it was
+ * the second one the screenshot was actually complaining about. Kept at
+ * 200km — the wider value with the better measured smoothness — with
+ * `SHADOW_CONTRAST_POWER` below doing the containment work instead.
  */
 export const SHADOW_SOFT_FLOOR_KM = 200;
+
+/**
+ * Contrast power applied to every baked value: `transmission ** POWER`.
+ *
+ * A pure Gaussian blur (`POWER = 1`) is smooth but visually shallow — most of
+ * an enclosed sea's approach sits in the 0.3-0.7 range, which still reads as
+ * "lit" once combined with the swell's own brightness and bloom. Raising the
+ * power steepens the falloff (0.5 at POWER=1 stays 0.5; at POWER=3 it drops
+ * to 0.125) while leaving the fixed points at 0 and 1 untouched and the
+ * function still smooth and monotonic everywhere — so it cannot introduce a
+ * new discontinuity, only change how quickly brightness drops off across the
+ * one the blur already produced. Rendering the raw transmission field at
+ * POWER=1/2/3/4 made the effect directly visible: the lit cone narrows and
+ * the interior darkens at each step, with 2-3 already reading as clearly
+ * contained rather than merely dim.
+ *
+ * 2 was chosen as the smaller of the two values that looked contained in
+ * that comparison — enough to fix the complaint without pushing the edges
+ * toward looking hard again. Checked against the same ground-truth score:
+ * zero deep-shadow leaks (unchanged from POWER=1), and every named
+ * chokepoint (Gulf of Mexico interior, Yucatan Channel, the Caribbean side
+ * of Panama) still reads as correctly dark or correctly lit depending on
+ * which sea it actually opens onto. The score also shows the actual cost of
+ * going higher: "wrongly dark" open-water points (bearings that sit close,
+ * in *bearing* space, to a real shadow boundary, so the blur bleeds a little
+ * shadow onto genuinely clear water) rise from 7 at POWER=1 to 149 at
+ * POWER=2, 283 at POWER=3 and 481 at POWER=6 — the same edges-toward-hard
+ * regression the wider floor was chosen to avoid, just reached through the
+ * other lever instead. 2 is the point on that curve still close to the
+ * POWER=1 baseline.
+ */
+export const SHADOW_CONTRAST_POWER = 2;
 
 /** Deep-water wavelength for a peak period, km — `g T^2 / 2pi`. Longer-period
  * swell diffracts a little further, which is why the softening this module
@@ -748,7 +799,9 @@ export function bakeShadowGrid(origin: Vec3, periodS: number, isLand: (p: Vec3) 
     const kmPerBearing = Math.max(Math.sin(r), 0.05) * EARTH_RADIUS_KM * dtheta;
     const sigmaKm = Math.max(SHADOW_SOFT_FLOOR_KM, Math.sqrt((wavelengthKm(periodS) * r * EARTH_RADIUS_KM) / 4));
     const blurred = gaussApproxPeriodic(raw, sigmaKm / kmPerBearing);
-    grid.set(blurred as unknown as ArrayLike<number>, ring * SHADOW_BEARINGS);
+    for (let b = 0; b < SHADOW_BEARINGS; b++) {
+      grid[ring * SHADOW_BEARINGS + b] = Math.pow(blurred[b], SHADOW_CONTRAST_POWER);
+    }
   }
   return grid;
 }
