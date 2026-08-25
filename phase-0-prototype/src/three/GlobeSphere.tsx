@@ -388,21 +388,43 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // itself does not. Filaments streaming at a fraction of the front's
       // speed is what real swell looks like — and it keeps a fast scrub from
       // reading as the texture racing.
-      coord += f * (uTime * 0.025 + uScrubHours * 0.004) * dirConfidence;
-      // vec3(uTime * k) for a single k broadcasts the identical value to
-      // all three axes, which drives this offset dead along the (1,1,1)
-      // direction forever. That direction is not neutral for the simplex
-      // noise below (noise.ts): its cell-skew step folds v through
-      // dot(v, vec3(1/3)), so moving along (1,1,1) shifts which lattice
-      // cell a sample falls in without changing its position inside the
-      // cell — every step re-hashes the same relative corner, and after
-      // enough of that the field stops looking pseudo-random and reads as
-      // correlated bands. Left alone this took only a couple of minutes to
-      // become visible (reported: smooth swell "turns into more distinct
-      // structure with visible non-gradient lines" when left running).
-      // Different, non-integer-ratio rates per axis keep the drift off that
-      // diagonal, at the same speed as before.
-      vec3 evolve = f * 0.15 * dirConfidence + vec3(uTime * 0.0091, uTime * 0.0069, uTime * 0.0113);
+      //
+      // Both terms below used to be uTime * rate — an unbounded ramp. The
+      // first version fixed only the evolve term (below), reasoning that
+      // vec3(uTime * k) broadcasting one value to all three axes drove it
+      // dead along (1,1,1), a direction the simplex noise below (noise.ts)
+      // treats specially (its cell-skew folds v through dot(v, vec3(1/3)),
+      // so travelling that exact diagonal keeps re-hashing the same
+      // relative corner of each lattice cell instead of sampling
+      // independently). Giving each axis a different rate fixed the worst,
+      // fastest-appearing case — but this term, coord's own flow drift,
+      // isn't on that diagonal and still banded, just slower (confirmed
+      // directly: left running, still-bounded-only-on-evolve build banded
+      // again within 4-7 minutes instead of 1-2). The actual shared cause
+      // is coherence, not just alignment: f is nearly the same direction
+      // across a broad swell packet, so any shared direction, advected
+      // far enough, drags a wide region through the same few noise-space
+      // cells together — and once that displacement is more than a couple
+      // of cell-widths, the base octave's own low-frequency undulations
+      // start reading as parallel ridges instead of blobby noise,
+      // regardless of exact lattice alignment.
+      //
+      // Fixed properly by bounding the displacement, not just steering it
+      // off one bad direction: sin(uTime * rate / bound) has the same
+      // instantaneous speed as the old uTime * rate at t=0 (so the flow
+      // still visibly moves frame to frame, matching the "never reads as a
+      // rigid texture" intent above), but the coordinate can now never
+      // travel more than "bound" noise-space units from where it started —
+      // nowhere near enough to expose the ridge structure. Confirmed
+      // against the same 4-7 minute idle window this was found with.
+      const float COORD_DRIFT_BOUND = 1.4;
+      coord += f * (COORD_DRIFT_BOUND * sin(uTime * (0.025 / COORD_DRIFT_BOUND)) + uScrubHours * 0.004) * dirConfidence;
+      // Same bounded-wander fix, per axis, with each axis's own bound and
+      // rate — both still different across axes so the wander's path isn't
+      // confined to a single shared line either.
+      const vec3 EVOLVE_DRIFT_BOUND = vec3(1.3, 1.1, 1.5);
+      vec3 evolve = f * 0.15 * dirConfidence
+        + EVOLVE_DRIFT_BOUND * sin(uTime * (vec3(0.0091, 0.0069, 0.0113) / EVOLVE_DRIFT_BOUND));
 
       // Moderate warp: enough for gentle S-curves and feathering, not so
       // much that it curls the streaks back into noodles. Round 7: octave

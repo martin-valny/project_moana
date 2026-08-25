@@ -3,8 +3,8 @@
 Last updated: 2026-08-25, branch `claude/swell-landmass-collision-j5f80b`.
 Working tree clean, everything below is pushed.
 
-**The current build is round 22 — a lattice-aligned noise-drift bug that
-banded the ocean's texture after a few idle minutes, fixed on top of
+**The current build is round 22b — the ocean's time-driven noise drift is
+now bounded, not just steered off its worst direction, fixed on top of
 round 21's land-texture mirror fix and round 20's contrast-power lever for
 enclosed seas.** Rounds 14 and 15 landed the current visual model:
 dispersive packets rather than filled disc sectors, brightness rather than
@@ -13,19 +13,27 @@ continents behind the water, and a panel glyph that tracks the scrubber.
 Round 17 changed no pixels — it settled the filament question and cleaned
 up after it.
 
-> ### Left running, the ocean used to band into contour lines — read "22." before touching the noise's time terms
+> ### Left running, the ocean used to band into contour lines — read "22." and "22b." before touching the noise's time terms
 >
-> Any `vec3(scalar)` fed into this shader's simplex-noise coordinates is
-> suspect: broadcasting one value to all three axes drives that offset
-> dead along `(1,1,1)`, which is a degenerate direction for the
-> Ashima/Gustavson noise this project uses — the cell-skew step treats it
-> specially, so moving along it re-hashes the same relative corner of each
-> lattice cell instead of sampling independently, and the field stops
-> looking random. The ocean's "slow independent evolution" term did exactly
-> this with `uTime`, and it only took a couple of minutes of idle real time
-> to become visible as parallel banding across the swell. Fixed by giving
-> the three axes different rates instead of one shared scalar. See "22."
-> for the direct before/after A/B that confirmed both the bug and the fix.
+> Round "22." found that `vec3(uTime * k)` — one scalar broadcast to all
+> three noise-coordinate axes — drives that offset dead along `(1,1,1)`, a
+> degenerate direction for the Ashima/Gustavson simplex noise this project
+> uses (its cell-skew step treats it specially, so travelling it re-hashes
+> the same relative corner of each lattice cell instead of sampling
+> independently). Giving each axis a different rate fixed that, but only
+> that — reported back as "looks pretty much the same," and round "22b."
+> found why: a *second*, undegenerate term (`coord`'s own flow-advection,
+> untouched by "22.") caused the same kind of banding on a longer timescale
+> (4-7 minutes instead of 1-2), because the real mechanism is broader than
+> lattice alignment — advecting *any* broad, coherent region of the field
+> far enough along *any* shared direction eventually exposes the base
+> octave's low-frequency structure as ridges. **The fix that actually holds
+> is bounding the displacement itself** (`bound * sin(uTime * rate/bound)`
+> in place of a raw `uTime * rate` ramp — same instantaneous speed, capped
+> net travel), verified clean for a full 10 idle minutes, not just the few
+> that exposed "22."'s gap. If a `uTime`-driven noise-coordinate term ever
+> needs touching again: the question is "is this bounded," not "which
+> direction does this avoid." See "22." then "22b." in order.
 >
 > ### The land texture was mirrored north/south — read "21." before trusting any screenshot of this app
 >
@@ -3791,6 +3799,104 @@ gates (calibrated on short-lived Playwright sessions, seconds not minutes
 of `uTime`) were never positioned to catch. Worth knowing if this class of
 bug recurs: any `vec3(scalar)` fed into this noise family's coordinate is
 suspect, not just time-driven ones.
+
+**Not fully solved — see "22b.".** Round "22." fixed the fastest, most
+pathological case; a second, slower-appearing case of the same underlying
+problem was still live and got reported back as "looks pretty much the
+same."
+
+### 22b. Round "22." was necessary but not sufficient — the *other* uTime-driven term still banded
+
+**Reported immediately after "22." shipped:** "looks pretty much the same,"
+alongside a proposal to fix it by auto-playing the timeline forward by
+default. Rather than accept either at face value, re-ran the same idle
+test for longer (7, then 10, minutes instead of 3) against the exact "22."
+build, git-stashing nothing this time since "22." was already the deployed
+code.
+
+**Confirmed: still banded, just slower.** At 4 minutes idle, the same
+mature ("3 Days") packet used in "22."'s own A/B showed clear parallel
+ridges again — "22."'s fix bought roughly 2x the time-to-failure (4-7
+minutes instead of 1-2), not a fix.
+
+**Root cause: "22." fixed the *worst* direction, not the general problem.**
+`coord`'s own flow-advection term was untouched by "22.":
+
+```glsl
+coord += f * (uTime * 0.025 + uScrubHours * 0.004) * dirConfidence;
+```
+
+`f` isn't the exact `(1,1,1)` diagonal "22." fixed, so this term isn't
+lattice-degenerate in the same narrow sense — but `f` is nearly the same
+direction across a broad, coherent swell packet (that's what "coherent
+packet" means), so a wide region of fragments still share almost the same
+large, ever-growing offset. The actual mechanism is broader than the
+lattice-alignment framing in "22." suggested: advecting *any* broad,
+coherent region of the field far enough along *any* shared direction drags
+it through the same sequence of noise-space cells together, and once that
+shared displacement exceeds a few cell-widths, the base octave's own
+low-frequency undulations stop reading as 2D blobby structure and start
+reading as parallel ridges perpendicular to the direction of travel —
+lattice alignment (round "22.") makes this worse and faster, but isn't the
+only way to trigger it.
+
+**Why "auto-play the timeline by default" would not have fixed this, and
+was not taken:** the banding is driven by `uTime` (real seconds elapsed),
+which runs continuously regardless of whether the scrub position
+(`uScrubHours`) is moving or held still. Auto-advancing the timeline adds
+a second, separate, *already-bounded* term into the same coordinate
+(`uScrubHours` is clamped to the path's real range, `-18` to `96`, so its
+own contribution — `uScrubHours * 0.004` — maxes out around `0.38`, nowhere
+near the magnitude that causes banding) — it does not reset or bound
+`uTime` itself. Explained this to the user rather than implementing it:
+it would not have addressed the reported symptom, and would have changed
+default app behaviour (playing the timeline forward without the user
+asking it to) for no real benefit.
+
+**The actual fix: bound the displacement itself, not just its direction.**
+Both terms — `coord`'s flow drift and `evolve`'s independent wander from
+"22." — replace `uTime * rate` with `bound * sin(uTime * (rate / bound))`.
+This has the identical instantaneous speed as the old linear ramp at
+`t=0` (so the flow still visibly moves, matching the original "never reads
+as a rigid texture" intent), but the coordinate can now never travel more
+than `bound` noise-space units from its start — far under the few-cell-
+width threshold where the ridge structure appears, for any amount of idle
+time, not just a few extra minutes:
+
+```glsl
+const float COORD_DRIFT_BOUND = 1.4;
+coord += f * (COORD_DRIFT_BOUND * sin(uTime * (0.025 / COORD_DRIFT_BOUND)) + uScrubHours * 0.004) * dirConfidence;
+
+const vec3 EVOLVE_DRIFT_BOUND = vec3(1.3, 1.1, 1.5);
+vec3 evolve = f * 0.15 * dirConfidence
+  + EVOLVE_DRIFT_BOUND * sin(uTime * (vec3(0.0091, 0.0069, 0.0113) / EVOLVE_DRIFT_BOUND));
+```
+
+Bounds and rates stay different per axis/term (as "22." established), so
+wandering doesn't reintroduce a new shared direction of its own.
+
+**Verified with a longer, harder test than "22." used.** Same git-stash
+methodology: reproduced the still-banding "22." build out to 7 minutes
+(clear ridges by 4 minutes, worse by 7), then applied this fix and re-ran
+idle for a full 10 minutes on the identical mature packet/camera/crop —
+smooth, marbled, materially indistinguishable from its own `t=0` frame at
+every checkpoint (0, 4, 7, 10 minutes). More than 3x the idle window that
+broke "22."'s fix, clean throughout.
+
+**Verified, full suite.** `npm run build` / `npm run lint` clean. Parity
+`B` 0.000999, `B2` 1.0001, `B3` 0.00333 — unchanged. `qc-real-pulses.mjs`
+all five real windows. Stage A 5/5. Stage C 8/9 — `M2` 2.71 (passing,
+consistent with "21."/"22."), `M10` still 0.171 (same pre-existing,
+already-documented finding from "21.", untouched by this round).
+`smoke-test.mjs` both viewports, zero console errors; `panel-glass-test.mjs`;
+`rotate-test.mjs`.
+
+**Lesson for next time a `uTime`-driven coordinate needs changing:** the
+right question isn't "does this avoid the exact `(1,1,1)` direction" — it's
+"is this term bounded." Any `uTime * rate` (or `vec3(uTime * rate)`) feeding
+this noise family's coordinates will eventually band some broad, coherent
+region of the field, on a timescale set by `rate` and how coherent the
+region is, regardless of which direction it points. Bound it.
 
 ### [REVERTED — see "18b."] 18. The land-shadow model was wrong in kind, not in tuning — rewritten as a shadow
 
