@@ -3,13 +3,32 @@
 Last updated: 2026-08-25, branch `claude/swell-landmass-collision-j5f80b`.
 Working tree clean, everything below is pushed.
 
-**The current build is round 20 — the baked shadow atlas plus a contrast-power
-lever that fixes how contained an enclosed sea reads.** Rounds 14 and 15
-landed the current visual model: dispersive packets rather than filled disc
-sectors, brightness rather than hue as the strength signal, no drawn line or
-marker for Helena, the continents behind the water, and a panel glyph that
-tracks the scrubber. Round 17 changed no pixels — it settled the filament
-question and cleaned up after it.
+**The current build is round 21 — the globe's land texture was rendering
+north/south-mirrored since round 7, now fixed, on top of round 20's
+contrast-power lever for enclosed seas.** Rounds 14 and 15 landed the
+current visual model: dispersive packets rather than filled disc sectors,
+brightness rather than hue as the strength signal, no drawn line or marker
+for Helena, the continents behind the water, and a panel glyph that tracks
+the scrubber. Round 17 changed no pixels — it settled the filament question
+and cleaned up after it.
+
+> ### The land texture was mirrored north/south — read "21." before trusting any screenshot of this app
+>
+> `THREE.Texture.flipY` defaults to `true` and nothing in `GlobeSphere.tsx`
+> ever set it, so the shader sampled the real Earth mask and night-lights
+> texture reflected through the equator: a correctly shaped planet with
+> every landmass on the wrong side of the equator from where it really is.
+> This is separate from, and predates, all the land-*shadow* work in "15."
+> through "20." — the shadow physics reads the same mask through a
+> `<canvas>`, which was never flipped, so every shadow decision in those
+> rounds was computed against real geography. Only what got drawn was
+> wrong, which is exactly what made round "20."'s own screenshot
+> verification misleading without anyone noticing — the swell in that
+> screenshot really was behaving correctly, just next to a mirrored
+> coastline. Fixed by two `flipY = false` lines. See "21." for how this was
+> found (real city coordinates projected through the app's own camera
+> landed nowhere near the coastline drawn on screen) and for a real
+> chokepoint at Panama re-verified against now-correct geography.
 
 > ### Land shadowing is round 19's baked atlas, tuned in round 20
 >
@@ -3558,6 +3577,14 @@ round "19." (2.44), not a new regression from this round (P50 unchanged at
 (`window.__moanaProject`, `?e2e=1`): the bright swell fills the Pacific/Gulf
 of Panama side, bends visibly around the small islands there, and stops flat
 at the isthmus — nothing visible on the Caribbean side in the same frame.
+**Correction, round "21.": this screenshot was itself misread — the globe's
+land texture was rendering north/south-mirrored at the time (a bug that
+predates this round, fixed in "21."), so the coastline in that screenshot
+was not actually Central America's. The `SHADOW_CONTRAST_POWER` fix above
+is still correct — everything about it was validated against the CPU model
+and the real mask, neither of which goes through the texture pipeline — but
+re-verify against a real screenshot using "21."'s fix before trusting a
+screenshot of this scene again.
 
 No new gate added this round — the ground-truth scorer used for the sweep
 above reused round "19."'s methodology as scratch tooling (deleted after,
@@ -3565,6 +3592,108 @@ per this project's convention of not committing throwaway analysis
 scripts); `parity-probe.mjs`'s `B3` already covers the CPU/GPU round trip
 for the baked grid and needed no changes since `SHADOW_CONTRAST_POWER` is
 applied before the grid is baked, not in the GLSL sampling path.
+
+### 21. The globe's land texture was rendering north/south-mirrored — found while re-checking round "20."
+
+**The user looked at round "20."'s verification screenshot and pushed back
+immediately: "Wait what?? It is on Caribbean side on the screenshot you
+provided.. you also have globe somehow twisted."** They were right on both
+counts, and this was not a land-shadow bug at all — it was a real rendering
+bug in `GlobeSphere.tsx`, unrelated to rounds "19."/"20.", that had been
+there since round "7." introduced the real Natural-Earth mask.
+
+**Root cause: `THREE.Texture.flipY` defaults to `true`, and nothing in this
+codebase ever set it.** The shader's `posToUv` derives `v` straight from
+latitude (`v = acos(p.y) / pi`, 0 at the north pole), matching every CPU
+reader of the same PNG — `buildIsLand`'s canvas (`ctx.getImageData`, which
+does not flip) and the plain `pngjs` readers the offline harnesses use.
+`THREE.TextureLoader` does not match that: its default `flipY = true`
+uploads the image reflected across its horizontal midline (the GL-texture
+convention, v=0 at the bottom), so the shader was sampling `uLandMask` and
+`uNightTexture` at `v` reflected through the equator. The result was a real,
+correctly shaped Earth with every landmass mirrored north/south — Central
+America's outline, say, drawn as if the Northern and Southern hemispheres
+had swapped places.
+
+**Why this went unnoticed for fourteen rounds of visual QA:** the mirror is
+internally consistent — recognisable coastline shapes, correct relative
+sizes, a plausible-looking planet — so nothing about it screamed "broken" on
+its own. It only became checkable by projecting *known* real-world
+coordinates through the app's own camera and comparing them against the
+picture, which is what round "20."'s re-verification (below) finally did.
+
+**Crucially, the land shadow *physics* (rounds "19."/"20.") was never
+affected.** `buildIsLand` reads the mask via a `<canvas>` and
+`getImageData`, never through a `THREE.Texture`, so every shadow-shape
+decision, every ground-truth score, and every chokepoint number in rounds
+"15."-"20." was computed against correctly oriented geography the whole
+time. Only what got *drawn* was wrong. This means round "20."'s own
+verification screenshot was misleading in a specific way: the swell shown in
+it really was being blocked and shaped correctly — just next to the wrong
+coastline outline, because that outline was mirrored.
+
+**Found by:** projecting a list of real cities (Panama City, Colón, Miami,
+Havana, Cancún, Acapulco, Cartagena, Bogotá, Guayaquil, Caracas — chosen to
+straddle both sides of Central America and both hemispheres) through
+`window.__moanaProject` (the same debug hook used to drive the camera) and
+marking them on a screenshot of the exact camera position round "20."
+screenshotted. Every single marker landed in open ocean, nowhere near the
+coastline drawn on screen — Panama City and Colón (a few km apart in
+reality) projected essentially on top of each other, both in water, both
+nowhere near the isthmus shape visible in the picture. Setting
+`landMask.flipY = false` and re-running the identical check landed every
+marker exactly where it belongs — Miami on Florida, Havana on Cuba, Panama
+City and Colón either side of the real isthmus.
+
+**Fix:** `landMask.flipY = false` and `nightTexture.flipY = false` in
+`GlobeSphere.tsx` (both textures are sampled with the same `uv`, computed
+once from `posToUv`, so both needed the same fix). Two lines.
+
+**Re-verified round "20."'s fix against the now-correct geography.**
+Projected `sourceWeightAt` for `kaimana` (the Pacific source that lights
+Panama) against Panama's real coordinates across the scrub range to find
+when a packet is actually there (weight peaks ~0.14 around h=66, not at the
+"3 Days"/h=72 preset used before — see `check-drift`/`shot-panama-swell`
+scratch scripts, deleted after). Screenshotted that moment: the swell washes
+up Costa Rica's and Panama's real Pacific coastline and stops there cleanly;
+the Caribbean side — Cuba, Jamaica, the Panama Canal's Atlantic mouth,
+Colombia's Caribbean coast, all correctly shaped and positioned this time —
+shows no swell energy at all in the same frame. This is the verification
+round "20." intended to do and, because of this bug, didn't actually do.
+
+**Verified.** `npm run build` / `npm run lint` clean. Parity `B`/`B2`/`B3`
+and `qc-real-pulses` unchanged (none of them render through
+`THREE.TextureLoader`, so none could have caught this, and none were
+affected by the fix). Stage A 5/5 (CPU-only, likewise unaffected). Stage C
+**8 of 9, and `M2` now passes**: 2.70 against the 2.50 threshold, up from
+round "20."'s 2.41 — the correctly positioned land mask changes which ocean
+pixels count as "near a coastline" for the field's own dynamic range, which
+is a plausible side effect of a real orientation fix, not something tuned
+for. `M10` (land stays subordinate to water) now **fails**, and for the
+mirror-image reason M2 now passes: `M10` samples luminance at a fixed list
+of real-world "interior land" points, and before this fix those points
+(via the same mirrored texture) were landing on whatever the flipped render
+happened to show there — not necessarily real land at all. Sampling true
+land now gives `landMean` 7.0 against an ocean median of 41 (ratio 0.170,
+below the gate's 0.35 floor) — genuinely darker than what the gate was
+calibrated against, because the gate was calibrated against mismeasured
+points. The screenshots above don't show land reading as a void competing
+with the water — it looks like the same restrained, orientation-only land
+treatment the design has always intended, just correctly placed — but
+`FIELD_GAIN`/land-shading are look decisions on a visual the user has spent
+many rounds converging on, so `M10`'s threshold was left alone rather than
+adjusted unilaterally, same treatment `M2` has gotten every round it's
+flipped. **This needs the user's call**: either `M10`'s floor was
+miscalibrated by this same bug and should move to reflect true land
+darkness, or land should be lightened slightly now that it's measured
+correctly. `smoke-test.mjs` both viewports, zero console errors;
+`panel-glass-test.mjs`; `rotate-test.mjs`.
+
+No new gate added — this is a rendering-pipeline bug, not a land-shadow
+model change, so nothing about `parity-probe.mjs`'s `B3` or the shadow atlas
+needed touching. `check-drift.mjs`, `verify-geo.mjs`, `shot-panama-swell.mjs`,
+`mark.mjs`, and `crop.mjs` were scratch tooling for this investigation,
+deleted after, per this project's convention.
 
 ### [REVERTED — see "18b."] 18. The land-shadow model was wrong in kind, not in tuning — rewritten as a shadow
 

@@ -640,7 +640,26 @@ export function GlobeSphere({
 }: GlobeSphereProps) {
   // Round 7: a real (Natural-Earth-derived) land/ocean mask replaces the
   // earlier hand-rolled scanline-fill one — see public/textures/SOURCES.md.
+  //
+  // `flipY = false`: `posToUv` below derives v directly from latitude
+  // (v=0 at the north pole), matching every CPU reader of this same PNG
+  // (`buildIsLand`'s canvas here, and the plain `pngjs` readers in the
+  // offline harnesses) — none of which flip. `THREE.Texture` defaults
+  // `flipY` to `true` (the GL-upload convention), which was left at that
+  // default here: the shader was sampling this mask at `v` reflected
+  // through the equator, so the displayed continents were a real, correctly
+  // shaped Earth with every landmass mirrored north/south — round 21 found
+  // this by projecting real-world city coordinates through the app's own
+  // camera and finding they landed in open ocean, nowhere near the
+  // continent shapes on screen (see PROGRESS.md, "round 21"). The land
+  // *physics* (`buildIsLand`, this same file) was never affected — it reads
+  // the canvas directly, unflipped — so the swell was always shadowing
+  // against the correct geography; only what got drawn on screen was wrong,
+  // which is what made every screenshot-based visual check across every
+  // prior round unreliable for judging "is the swell on the correct side of
+  // this coastline" without realising it.
   const landMask = useLoader(THREE.TextureLoader, '/textures/earth-water.png');
+  landMask.flipY = false;
   landMask.wrapS = THREE.RepeatWrapping;
   landMask.colorSpace = THREE.NoColorSpace;
   landMask.minFilter = THREE.LinearMipmapLinearFilter;
@@ -650,7 +669,13 @@ export function GlobeSphere({
 
   // Round 7: real Earth night-lights imagery for continent structure and
   // ocean fine detail — see public/textures/SOURCES.md for source/license.
+  // Sampled with the same `uv` as `landMask` above (see `posToUv` call
+  // site), so it needs the same `flipY = false` fix for the same reason —
+  // otherwise its continent detail and city lights would sit on the
+  // opposite hemisphere from the (now-corrected) land mask they're drawn
+  // on top of.
   const nightTexture = useLoader(THREE.TextureLoader, '/textures/earth-night.jpg');
+  nightTexture.flipY = false;
   nightTexture.wrapS = THREE.RepeatWrapping;
   nightTexture.colorSpace = THREE.NoColorSpace; // sampled as raw texel data, same as this shader's hand-tuned hex colours — not colour-managed
   nightTexture.minFilter = THREE.LinearMipmapLinearFilter;
