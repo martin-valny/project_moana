@@ -4037,6 +4037,43 @@ the 12–77× pointwise figures above because a 1.5° central difference average
 the stretch across its window rather than sampling the peak. It does not need
 the peak to fail.)
 
+**Verified visually — and the first attempt at that was inconclusive, which
+is worth recording.** The obvious check is an app-screenshot A/B: same scrub
+position, same camera, old build against new, at the drift sine's peak phases
+(t = 0/88/264/600 s, deliberately including 88 s and 264 s, which round "22b."
+missed). Run at the default framing and 1600x900, **the two builds look nearly
+the same** — the old one only slightly harder-edged inside the packet. That is
+not evidence the fix works, and it is close to the evidence rounds "22." and
+"22b." both signed off on. Two confounds were ruled out first: the sandbox
+browser reports 4 cores / 8 GB, so it picks the **high** tier at 5 octaves and
+is not quietly rendering a coarser field than the user sees; and the scrubber
+really was hard right in both runs.
+
+The reason the app A/B is weak is that the real scene compresses the very
+structure under test — the packet envelope, the colour ramp, ACES and bloom all
+sit on top of `n` — and whether the defect is legible at all depends on camera
+angle, zoom and pixel density, none of which the reported screenshot shares
+with the default framing.
+
+So the pipeline was stripped back instead: **`noise-field-probe.mjs`** renders
+only `n`, over a patch parameterised so the packet's leading edge runs
+horizontally across the frame, with no colour, lighting, bloom or camera in the
+way. Shear along the propagation direction therefore has to appear as
+horizontal smearing. That test is unambiguous:
+
+| map | phase | result |
+|---|---|---|
+| pre-round-23 | `t=0`, scrub 96 h | hard horizontal smear across the leading edge — **banded at rest** |
+| pre-round-23 | `t=264 s`, scrub 96 h | pronounced horizontal lanes through the packet body |
+| round 23 | `t=264 s`, scrub 96 h | isotropic marbling, no directional structure |
+| round 23 | `t=3600 s`, scrub 96 h | unchanged after a full hour of idle |
+
+The `t=0` row is the one that matters most: it confirms the defect never
+needed elapsed time at all, which is why two rounds of bounding a `uTime` term
+could not have fixed it. The probe's old-map branch is kept frozen and
+deliberately *not* wired to the shipping code, so deleting `f` and the drift
+terms could not quietly delete the counterexample too.
+
 A pixel-level ridge detector on the rendered frame was considered as a third
 gate and deliberately not added: it would be dominated by coastlines and the
 limb, and a flaky gate is worse than none. The cost is that B4 catches this
