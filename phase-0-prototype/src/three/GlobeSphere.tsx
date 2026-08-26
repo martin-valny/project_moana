@@ -302,12 +302,15 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // a storm's generation area isn't organized into a direction yet.
       float poleConfidence = energyAccum > 1e-4 ? clamp(poleAccum / energyAccum, 0.0, 1.0) : 1.0;
 
-      // Fragments outside every source's reach (most of the globe, most of
-      // the time) get a fallback axis purely to keep the anisotropic warp
-      // below well-defined — with energyAccum ~0 the noise stays low-
-      // contrast there regardless of which direction this points.
+      // Only the flow's *magnitude* is read now, never its direction. Round
+      // 23 removed the normalized tangent f entirely: its every consumer was
+      // a noise-coordinate offset, and offsetting a coordinate by anything
+      // that varies per fragment is what banded the ocean (see
+      // moanaNoiseCoord in swellField.ts). flowMag survives because
+      // dirConfidence below still needs it, and lateral inhibition (wDir,
+      // round 10) survives because it is what keeps flowMag itself from
+      // swinging across inter-source seams.
       float flowMag = length(flowAccum);
-      vec3 f = flowMag > 1e-5 ? normalize(flowAccum) : vec3(0.0, 0.0, 1.0);
       // MOANA_FIELD_GAIN exists because the raw sum has no reason to land in
       // 0..1 — measured, its P99 across the scrubber was 0.385..0.654, so a
       // 0..1 ramp built on it would never reach its own top. That is
@@ -347,84 +350,29 @@ const SURFACE_FRAGMENT = /* glsl */ `
       //
       // git show 1856985 has the working anisotropic implementation if
       // this is ever revisited. B2 in parity-probe.mjs asserts the sampling
-      // stays isotropic so a stretch cannot creep back in unnoticed.
+      // stays isotropic, and B4 asserts it stays unsheared — round 23 found
+      // that B2 alone could not see the second failure, because it evaluates
+      // the transform at one point with dirConfidence held constant, and the
+      // banding came from dirConfidence *varying between neighbours*.
       //
-      // dirConfidence survives the simplification and is still load
-      // bearing: it gates the flow travel and domain warp below. "Direction
-      // away from a point on a sphere" has a singularity at that point (the
-      // hairy-ball problem), so direction rotates arbitrarily fast near
-      // every source's origin — that shipped once as a sharp diamond
-      // artifact at Helena's origin. flowMag is small both there and in
-      // genuinely calm water, exactly the two places direction shouldn't be
-      // trusted, so it doubles as the fade signal for free. poleConfidence
-      // multiplies in because near a source's origin away is locked to
-      // the stable D, which reads as high confidence only because it is
-      // pinned, not because the field has organised.
+      // dirConfidence survives, but its job has changed. It used to scale
+      // both the sampling domain and the flow travel — i.e. it multiplied
+      // *coordinates*, which is what sheared the noise into contour lanes
+      // (moanaNoiseCoord in swellField.ts has the measurements). Now it only
+      // ever weights an *amplitude*: the detail octave below. The reason it
+      // is the right signal for that is unchanged — "direction away from a
+      // point on a sphere" has a singularity at that point (the hairy-ball
+      // problem), so the field is least organised exactly where flowMag is
+      // small, both at a source's own origin and in genuinely calm water.
+      // poleConfidence multiplies in because near a source's origin away
+      // is locked to the stable D, which reads as high confidence only
+      // because it is pinned, not because the field has organised.
       float dirConfidence = clamp(flowMag * 6.0, 0.0, 1.0) * poleConfidence;
-      vec3 coord = moanaNoiseCoord(vPos, dirConfidence);
-
-      // Travel along the flow, plus a slow independent evolution so the
-      // field never reads as a rigid texture sliding past.
-      //
-      // Both terms below multiply f by dirConfidence — without this, even
-      // once the stretch ratio above correctly fades to isotropic near a
-      // source's own origin, these two still fed raw (unfaded) f straight
-      // into the domain warp's offset. Domain warping is *designed* to
-      // amplify small input changes, so f's residual rotation there alone
-      // was enough to redraw the spiral the stretch fade was supposed to
-      // remove — found by testing a rotated camera angle that brought a
-      // source's own origin (not just an inter-source seam) into frame.
-      // Round 14: uScrubHours joins uTime here, and it is the single biggest
-      // "smooth over time" change in this round. Before, uTime drove the
-      // filaments and offsetHours drove the packet edges — two independent
-      // clocks, so scrubbing moved the envelope while the texture underneath
-      // sat still. The ocean re-drew instead of responding. Advecting the
-      // noise phase with the scrub too means dragging the timeline
-      // physically pulls the water along the flow.
-      //
-      // 0.004 rad/hour is deliberately well under the ~0.0141 rad/hour a
-      // 16 s group velocity implies, and that is the honest number rather
-      // than a compromise: wave *energy* travels at Cg, the water surface
-      // itself does not. Filaments streaming at a fraction of the front's
-      // speed is what real swell looks like — and it keeps a fast scrub from
-      // reading as the texture racing.
-      //
-      // Both terms below used to be uTime * rate — an unbounded ramp. The
-      // first version fixed only the evolve term (below), reasoning that
-      // vec3(uTime * k) broadcasting one value to all three axes drove it
-      // dead along (1,1,1), a direction the simplex noise below (noise.ts)
-      // treats specially (its cell-skew folds v through dot(v, vec3(1/3)),
-      // so travelling that exact diagonal keeps re-hashing the same
-      // relative corner of each lattice cell instead of sampling
-      // independently). Giving each axis a different rate fixed the worst,
-      // fastest-appearing case — but this term, coord's own flow drift,
-      // isn't on that diagonal and still banded, just slower (confirmed
-      // directly: left running, still-bounded-only-on-evolve build banded
-      // again within 4-7 minutes instead of 1-2). The actual shared cause
-      // is coherence, not just alignment: f is nearly the same direction
-      // across a broad swell packet, so any shared direction, advected
-      // far enough, drags a wide region through the same few noise-space
-      // cells together — and once that displacement is more than a couple
-      // of cell-widths, the base octave's own low-frequency undulations
-      // start reading as parallel ridges instead of blobby noise,
-      // regardless of exact lattice alignment.
-      //
-      // Fixed properly by bounding the displacement, not just steering it
-      // off one bad direction: sin(uTime * rate / bound) has the same
-      // instantaneous speed as the old uTime * rate at t=0 (so the flow
-      // still visibly moves frame to frame, matching the "never reads as a
-      // rigid texture" intent above), but the coordinate can now never
-      // travel more than "bound" noise-space units from where it started —
-      // nowhere near enough to expose the ridge structure. Confirmed
-      // against the same 4-7 minute idle window this was found with.
-      const float COORD_DRIFT_BOUND = 1.4;
-      coord += f * (COORD_DRIFT_BOUND * sin(uTime * (0.025 / COORD_DRIFT_BOUND)) + uScrubHours * 0.004) * dirConfidence;
-      // Same bounded-wander fix, per axis, with each axis's own bound and
-      // rate — both still different across axes so the wander's path isn't
-      // confined to a single shared line either.
-      const vec3 EVOLVE_DRIFT_BOUND = vec3(1.3, 1.1, 1.5);
-      vec3 evolve = f * 0.15 * dirConfidence
-        + EVOLVE_DRIFT_BOUND * sin(uTime * (vec3(0.0091, 0.0069, 0.0113) / EVOLVE_DRIFT_BOUND));
+      // The whole sampling map, from the shared GLSL: a rotation and a
+      // uniform scale, nothing else. See moanaNoiseCoord in swellField.ts for
+      // the invariant, why round 23 needed it, and the gate that holds it.
+      vec3 coord = moanaNoiseCoord(vPos, uTime, uScrubHours);
+      vec3 evolve = moanaNoiseEvolve(uTime);
 
       // Moderate warp: enough for gentle S-curves and feathering, not so
       // much that it curls the streaks back into noodles. Round 7: octave
@@ -433,7 +381,13 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // in qualityTier.ts but this cap meant only 3 were ever used. Finer
       // filament detail is exactly what the reference shows more of.
       float n = warpedFbm(coord * 0.95, uOctaves, 0.45, evolve);
-      n += fbm(coord * 3.0, uOctaves) * 0.06; // wispy edge detail
+      // Wispy edge detail, weighted UP inside a packet. This carries the
+      // "finer structure where the energy is" cue that moanaNoiseCoord's old
+      // mix(1.0, 1.75, dirConfidence) domain scale used to provide — but as
+      // an amplitude, which moves no sample points and so shears the field by
+      // exactly nothing. Amplitude is where every per-fragment variation
+      // belongs now; coordinates are reserved for isometries.
+      n += fbm(coord * 3.0, uOctaves) * (0.06 + 0.08 * dirConfidence);
       n *= 0.75 + fieldEnergy01 * 0.9;                 // local swell energy drives contrast
 
       // Broad soft bands with a small bright core. Two failure modes to

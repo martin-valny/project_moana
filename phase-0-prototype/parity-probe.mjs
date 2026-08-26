@@ -294,13 +294,22 @@ console.log(`PASS  B  CPU/GPU parity — worst divergence ${worst.toFixed(6)}, t
 // ocean shader calls — rather than a JS reimplementation. A mirrored copy
 // would keep passing against a shader that had drifted away from it, which is
 // how the original bug survived six rounds in the first place.
+//
+// Round 23 note: this is necessary and was never sufficient. B2 evaluates the
+// transform at ONE point, and it used to hold dirConfidence constant while it
+// did. The banding rounds 22/22b chased came from dirConfidence *varying
+// between neighbouring fragments*, which no single-point probe can see — B2
+// kept reporting 1.0001 straight through both failed rounds. B4 below covers
+// that blind spot. B2 now also runs at a non-zero (uTime, uScrubHours) so the
+// spin cannot smuggle a stretch in either.
 {
   const ISO_TOLERANCE = 0.02;
   const B2_FRAGMENT = `#version 300 es
 precision highp float;
 out vec4 fragColor;
 uniform vec3 uP;
-uniform float uDirConfidence;
+uniform float uTime;
+uniform float uScrubHours;
 uniform int uComp;
 
 ${SWELL_FIELD_GLSL}
@@ -312,7 +321,7 @@ vec4 packFloat(float v) {
 }
 
 void main() {
-  vec3 c = moanaNoiseCoord(normalize(uP), uDirConfidence);
+  vec3 c = moanaNoiseCoord(normalize(uP), uTime, uScrubHours);
   float v = uComp == 0 ? c.x : (uComp == 1 ? c.y : c.z);
   fragColor = packFloat(clamp((v + 4.0) / 8.0, 0.0, 1.0));
 }`;
@@ -353,7 +362,7 @@ void main() {
   const b2Browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
   const b2Page = await b2Browser.newPage();
   const coords = await b2Page.evaluate(
-    ({ VERTEX, FRAGMENT, samples, dirConfidence }) => {
+    ({ VERTEX, FRAGMENT, samples, timeS, scrubHours }) => {
       const canvas = document.createElement('canvas');
       canvas.width = 1;
       canvas.height = 1;
@@ -378,7 +387,8 @@ void main() {
       const aPos = gl.getAttribLocation(prog, 'aPos');
       gl.enableVertexAttribArray(aPos);
       gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-      gl.uniform1f(gl.getUniformLocation(prog, 'uDirConfidence'), dirConfidence);
+      gl.uniform1f(gl.getUniformLocation(prog, 'uTime'), timeS);
+      gl.uniform1f(gl.getUniformLocation(prog, 'uScrubHours'), scrubHours);
       const px = new Uint8Array(4);
       const readComponent = (P, comp) => {
         gl.uniform3fv(gl.getUniformLocation(prog, 'uP'), P);
@@ -394,7 +404,7 @@ void main() {
       }
       return out;
     },
-    { VERTEX, FRAGMENT: B2_FRAGMENT, samples, dirConfidence: 1.0 },
+    { VERTEX, FRAGMENT: B2_FRAGMENT, samples, timeS: 137.0, scrubHours: 96.0 },
   );
   await b2Browser.close();
 
@@ -565,4 +575,246 @@ void main() {
   console.log(
     `PASS  B3  packed shadow atlas matches between CPU and GPU sampling — worst delta ${worst.toFixed(5)}, tolerance ${SHADOW_TOLERANCE}`,
   );
+}
+
+// --- B4: the noise sampling map is an isometry ------------------------------
+//
+// The gate rounds "22." and "22b." both needed and neither added.
+//
+// Those rounds read the ocean's banding as a *magnitude* problem — a
+// `uTime * rate` coordinate offset ramping too far — and fixed it twice, first
+// by steering the drift off simplex's (1,1,1) diagonal, then by bounding it
+// with `bound * sin(uTime * rate / bound)`. The user reported banding after
+// both. The framing was wrong: a spatially *uniform* offset cannot band at any
+// magnitude, because it slides the field rigidly. What bands is **shear** — an
+// offset that differs between neighbouring fragments — and every offset in the
+// old shader was multiplied by `dirConfidence`, a cubed packet weight whose
+// gradient measures 28.5 per unit sphere radius. Composed, the sampling map
+// was compressing the noise domain 12x at rest and 77x at the drift sine's
+// peak, along the propagation direction, producing contour lanes parallel to
+// each packet's leading edge.
+//
+// So the invariant is now structural: `vPos -> coord` must be an isometry up
+// to one uniform scale. This checks it two ways, because neither half is
+// sufficient alone.
+//
+// **Numerically** — walk a grid of points across a real mature packet, at
+// several (uTime, uScrubHours) including the extremes, and finite-difference
+// the map along two orthogonal great-circle directions. For a rotation and a
+// uniform scale the two columns come back equal in length and orthogonal, so
+// the larger singular value over the smaller is 1.0. Anything that varies per
+// fragment shows up here immediately: replaying the pre-round-23 map through
+// this same metric measures 2.59 at rest, 2.92 at the far scrubber and 7.48
+// at the drift sine's peak — i.e. it fails at every phase, including t=0.
+// (Those are lower than the 12-77x pointwise figures quoted in swellField.ts
+// because a 1.5-degree central difference averages the stretch across the
+// window instead of sampling its peak. It does not need the peak to fail.)
+//
+// **Structurally** — the numeric half is only decisive because `coord` now
+// depends on nothing but `vPos` and two uniforms, so `moanaNoiseCoord` IS the
+// composed map. The historical bug did not live in that function; it lived at
+// the call site, in a `coord +=` line that the function itself knew nothing
+// about. So this also reads GlobeSphere.tsx and asserts `coord` is still
+// assigned exactly once and never added to. That is the exact shape of the
+// regression, and a numeric probe of the shared function can never see it.
+{
+  const SHEAR_TOLERANCE = 0.25; // sigma_max/sigma_min may not exceed 1.25
+  const B4_FRAGMENT = `#version 300 es
+precision highp float;
+out vec4 fragColor;
+uniform vec3 uP;
+uniform float uTime;
+uniform float uScrubHours;
+uniform int uComp;
+
+${SWELL_FIELD_GLSL}
+
+vec4 packFloat(float v) {
+  vec4 enc = fract(vec4(1.0, 255.0, 65025.0, 16581375.0) * v);
+  enc -= enc.yzww * vec4(1.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0, 0.0);
+  return enc;
+}
+
+void main() {
+  vec3 c = moanaNoiseCoord(normalize(uP), uTime, uScrubHours);
+  float v = uComp == 0 ? c.x : (uComp == 1 ? c.y : c.z);
+  fragColor = packFloat(clamp((v + 4.0) / 8.0, 0.0, 1.0));
+}`;
+
+  const norm3 = (v) => {
+    const l = Math.hypot(...v);
+    return v.map((x) => x / l);
+  };
+  const cross3 = (a, b) => [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+
+  // Same storm as B2 — 55S 175W travelling local-east. The grid walks the
+  // radii a mature packet actually occupies (0.3 .. 1.45 rad, i.e. across the
+  // whole body and out past the leading edge, where dirConfidence's gradient
+  // peaked) at several bearings off-axis.
+  const latS = -55 * D2R;
+  const lonS = -175 * D2R;
+  const S = norm3([Math.cos(latS) * Math.cos(lonS), Math.sin(latS), Math.cos(latS) * Math.sin(lonS)]);
+  const Dv = norm3(cross3([0, 1, 0], S));
+  const E = norm3(cross3(S, Dv));
+  const at = (arc, bearing) => {
+    const dir = [0, 1, 2].map((i) => Dv[i] * Math.cos(bearing) + E[i] * Math.sin(bearing));
+    return [0, 1, 2].map((i) => S[i] * Math.cos(arc) + dir[i] * Math.sin(arc));
+  };
+
+  const H = 1.5 * D2R; // finite-difference step, as a great-circle arc
+  const probes = [];
+  for (const arcDeg of [20, 40, 55, 70, 83]) {
+    for (const bearingDeg of [0, 25, 55]) {
+      const arc = arcDeg * D2R;
+      const bearing = bearingDeg * D2R;
+      // Two orthonormal tangents at P: along the great circle away from the
+      // storm, and perpendicular to it. Stepping equal arc lengths along both
+      // is what makes the two Jacobian columns directly comparable.
+      const radialPlus = at(arc + H, bearing);
+      const radialMinus = at(arc - H, bearing);
+      const tangentPlus = at(arc, bearing + H / Math.sin(arc));
+      const tangentMinus = at(arc, bearing - H / Math.sin(arc));
+      probes.push({ label: `${arcDeg}deg out, bearing ${bearingDeg}deg`, radialPlus, radialMinus, tangentPlus, tangentMinus });
+    }
+  }
+
+  // The phases that matter: rest, the far scrubber (where the old scrub term
+  // peaked), and a couple of minutes of idle (where the old drift sine peaked).
+  const PHASES = [
+    ['t=0s, scrub 0h', 0, 0],
+    ['t=0s, scrub 96h', 0, 96],
+    ['t=88s, scrub 96h', 88, 96],
+    ['t=264s, scrub -18h', 264, -18],
+    ['t=600s, scrub 48h', 600, 48],
+  ];
+
+  const flat = [];
+  for (const ph of PHASES) {
+    for (const pr of probes) {
+      for (const key of ['radialPlus', 'radialMinus', 'tangentPlus', 'tangentMinus']) {
+        flat.push({ P: pr[key], timeS: ph[1], scrubHours: ph[2] });
+      }
+    }
+  }
+
+  const b4Browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
+  const b4Page = await b4Browser.newPage();
+  const coords = await b4Page.evaluate(
+    ({ VERTEX, FRAGMENT, flat }) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1;
+      canvas.height = 1;
+      const gl = canvas.getContext('webgl2');
+      if (!gl) throw new Error('no webgl2');
+      const compile = (type, source) => {
+        const sh = gl.createShader(type);
+        gl.shaderSource(sh, source);
+        gl.compileShader(sh);
+        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+        return sh;
+      };
+      const prog = gl.createProgram();
+      gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERTEX));
+      gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAGMENT));
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+      gl.useProgram(prog);
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      const aPos = gl.getAttribLocation(prog, 'aPos');
+      gl.enableVertexAttribArray(aPos);
+      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+      const uP = gl.getUniformLocation(prog, 'uP');
+      const uTime = gl.getUniformLocation(prog, 'uTime');
+      const uScrub = gl.getUniformLocation(prog, 'uScrubHours');
+      const uComp = gl.getUniformLocation(prog, 'uComp');
+      const px = new Uint8Array(4);
+      return flat.map(({ P, timeS, scrubHours }) =>
+        [0, 1, 2].map((comp) => {
+          gl.uniform3fv(uP, P);
+          gl.uniform1f(uTime, timeS);
+          gl.uniform1f(uScrub, scrubHours);
+          gl.uniform1i(uComp, comp);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+          gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+          const packed = px[0] / 255 + px[1] / 65025 + px[2] / 16581375 + px[3] / 4228250625;
+          return packed * 8 - 4;
+        }),
+      );
+    },
+    { VERTEX, FRAGMENT: B4_FRAGMENT, flat },
+  );
+  await b4Browser.close();
+
+  const sub = (a, b) => a.map((x, i) => x - b[i]);
+  const dot = (a, b) => a.reduce((acc, x, i) => acc + x * b[i], 0);
+
+  let worstRatio = 1;
+  let worstLabel = '';
+  let cursor = 0;
+  console.log('');
+  for (const [phaseLabel] of PHASES) {
+    let phaseWorst = 1;
+    for (const pr of probes) {
+      const [rp, rm, tp, tm] = [coords[cursor], coords[cursor + 1], coords[cursor + 2], coords[cursor + 3]];
+      cursor += 4;
+      // Jacobian columns: d(coord)/d(arc) along each tangent, central difference.
+      const u = sub(rp, rm).map((x) => x / (2 * H));
+      const v = sub(tp, tm).map((x) => x / (2 * H));
+      // Singular values of the 3x2 [u v] via the 2x2 Gram matrix.
+      const a = dot(u, u);
+      const b = dot(u, v);
+      const c = dot(v, v);
+      const mean = (a + c) / 2;
+      const disc = Math.sqrt(Math.max(((a - c) / 2) ** 2 + b * b, 0));
+      const sMax = Math.sqrt(Math.max(mean + disc, 0));
+      const sMin = Math.sqrt(Math.max(mean - disc, 0));
+      const ratio = sMax / Math.max(sMin, 1e-9);
+      phaseWorst = Math.max(phaseWorst, ratio);
+      if (ratio > worstRatio) {
+        worstRatio = ratio;
+        worstLabel = `${phaseLabel}, ${pr.label}`;
+      }
+    }
+    console.log(`  ${phaseLabel.padEnd(20)} worst sigma_max/sigma_min ${phaseWorst.toFixed(4)}`);
+  }
+
+  if (worstRatio - 1 > SHEAR_TOLERANCE) {
+    console.error(
+      `FAIL  B4  the noise sampling map is sheared — sigma_max/sigma_min ${worstRatio.toFixed(3)} at ${worstLabel}, ` +
+        `tolerance ${(1 + SHEAR_TOLERANCE).toFixed(2)}. Something per-fragment is reaching a noise COORDINATE. ` +
+        `Move it to an amplitude instead; see moanaNoiseCoord in swellField.ts.`,
+    );
+    process.exit(1);
+  }
+  console.log(
+    `PASS  B4  the noise sampling map is an isometry — worst sigma_max/sigma_min ${worstRatio.toFixed(4)}, ` +
+      `tolerance ${(1 + SHEAR_TOLERANCE).toFixed(2)}`,
+  );
+
+  // The structural half. `moanaNoiseCoord` is only the whole composed map for
+  // as long as the call site leaves it alone; the bug this round fixed was a
+  // `coord +=` line the shared function could not have known about.
+  const shaderSrc = fs.readFileSync(new URL('./src/three/GlobeSphere.tsx', import.meta.url), 'utf8');
+  const oceanBody = shaderSrc.slice(shaderSrc.indexOf('const SURFACE_FRAGMENT'), shaderSrc.indexOf('const ATMOSPHERE_VERTEX'));
+  const codeLines = oceanBody
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*') && !l.trim().startsWith('/*'));
+  const mutations = codeLines.filter((l) => /\bcoord\s*(\+=|-=|\*=|\/=)/.test(l));
+  const assignments = codeLines.filter((l) => /\bvec3\s+coord\s*=/.test(l));
+  if (mutations.length > 0 || assignments.length !== 1) {
+    console.error(
+      `FAIL  B4  the ocean shader's noise coordinate is no longer a single unmodified call — ` +
+        `${assignments.length} assignment(s), ${mutations.length} in-place mutation(s). ` +
+        `Every per-fragment offset added here shears the noise; that is the round 22/22b/23 bug. ` +
+        `Offending: ${[...assignments, ...mutations].map((l) => l.trim()).join(' | ')}`,
+    );
+    process.exit(1);
+  }
+  console.log('PASS  B4  the ocean shader assigns its noise coordinate once, from moanaNoiseCoord, and never offsets it');
 }

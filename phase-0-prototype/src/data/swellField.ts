@@ -488,15 +488,93 @@ export const SWELL_FIELD_GLSL = /* glsl */ `
     return normalize(mix(D, away, poleFade));
   }
 
-  // The noise sampling domain, isotropic by decision — the full history and
-  // reasoning is at the call site in GlobeSphere.tsx. It lives here, in the
-  // shared GLSL, rather than inline in the ocean shader for one reason: B2 in
-  // parity-probe.mjs measures THIS function. A probe that reimplemented the
-  // transform in JS would keep passing against a copy that had drifted from
-  // the shader, which is the exact bug shape (two places holding one fact)
-  // that let the anisotropy no-op survive rounds 9 through 16.
-  vec3 moanaNoiseCoord(vec3 P, float dirConfidence) {
-    return P * mix(1.0, 1.75, dirConfidence);
+  // --- The noise sampling map: an ISOMETRY, by invariant --------------------
+  //
+  // Everything about *where* the ocean's noise is sampled lives in this one
+  // function, and it is allowed to be a rotation and a uniform scale and
+  // nothing else. A rotation has an orthogonal Jacobian, so the field it
+  // samples can never be sheared, compressed or contoured — at any angle,
+  // for any elapsed time, with no bound of any kind needed.
+  //
+  // **This is the round-23 invariant, and it replaces the rule round "22b."
+  // recorded** ("any uTime * rate will eventually band — bound it"), which
+  // was wrong. A spatially *uniform* drift cannot band however far it
+  // travels: it slides the field rigidly and the sampling map stays the
+  // identity. What bands is **shear** — an offset that differs between
+  // neighbouring fragments. Rounds "22." and "22b." each bounded a magnitude
+  // while leaving the spatial gradient that actually caused the banding
+  // fully intact, which is why neither fixed it. See PROGRESS.md round 23.
+  //
+  // Concretely, what used to be here and at the call site:
+  //
+  //   coord  = P * mix(1.0, 1.75, dirConfidence);
+  //   coord += f * (bound * sin(uTime * k) + uScrubHours * 0.004) * dirConfidence;
+  //
+  // dirConfidence is a *cubed* packet weight ramping 0 -> 1 across a body only
+  // ~0.23 rad wide, so |grad dirConfidence| measures 28.5 per unit sphere
+  // radius. Multiplying any offset by it shears the domain by
+  // 1 + amplitude * 28.5 — pointwise, 12x at rest at the far scrubber and 77x
+  // at the drift sine's peak, along the propagation direction, with iso-lines
+  // parallel to each packet's leading edge. (B4 replays that map through a
+  // 1.5-degree central difference and gets 2.6-7.5: the same failure, read
+  // through a window that averages rather than samples the peak.) Those are exactly the nested
+  // contour lanes the bug was reported as. It is also the same anisotropic
+  // stretch round 16 built deliberately and had rejected on sight ("hard,
+  // evenly spaced contour lines, nothing like water") — an order of magnitude
+  // stronger, and arrived at by accident rather than by decision.
+  //
+  // Anything that must vary from fragment to fragment modulates the noise's
+  // AMPLITUDE instead (see the detail octave in GlobeSphere.tsx). Amplitude
+  // moves no sample points, so it contributes exactly zero shear.
+  //
+  // B4 in parity-probe.mjs measures the Jacobian of THIS function across a
+  // real packet and fails above 1.25. Both live here, in the shared GLSL,
+  // for the same reason B2 does: a probe measuring a JS copy would keep
+  // passing against a shader that had drifted away from it.
+
+  /** Uniform scale. Constant by the invariant above, never confidence-varying. */
+  const float MOANA_NOISE_SCALE = 1.2;
+  /**
+   * How fast the sampling frame spins, in radians per real second and per
+   * forecast-hour of scrub. Deliberately slow: this is the "the water is
+   * alive" cue, not the "which way is this swell going" cue — direction is
+   * carried by the packets' own travel and round 14's comet envelope, which
+   * is what that asymmetry was built for. The scrub term keeps round 14's
+   * intent that dragging the timeline physically pulls the water along.
+   */
+  const float MOANA_NOISE_SPIN_PER_S = 0.0050;
+  const float MOANA_NOISE_SPIN_PER_H = 0.0020;
+  /**
+   * Axis the sampling frame spins about. Arbitrary but fixed, and
+   * deliberately nowhere near (1,1,1): round "22." established that the
+   * simplex implementation in noise.ts treats its own lattice diagonal as a
+   * degenerate direction, so no animated path should run along it.
+   */
+  const vec3 MOANA_NOISE_SPIN_AXIS = vec3(0.42, 0.76, -0.49);
+
+  vec3 moanaNoiseCoord(vec3 P, float timeS, float scrubHours) {
+    float a = timeS * MOANA_NOISE_SPIN_PER_S + scrubHours * MOANA_NOISE_SPIN_PER_H;
+    float ca = cos(a);
+    float sa = sin(a);
+    vec3 k = normalize(MOANA_NOISE_SPIN_AXIS);
+    // Rodrigues' rotation formula — an exact isometry at every angle, which
+    // is why this needs none of round "22b."'s sin() bounding.
+    vec3 R = P * ca + cross(k, P) * sa + k * dot(k, P) * (1.0 - ca);
+    return R * MOANA_NOISE_SCALE;
+  }
+
+  /**
+   * The slow independent evolution handed to the domain warp as its flow
+   * bias, so the field never reads as one rigid texture sliding past.
+   *
+   * A spatially uniform translation: identical for every fragment, so its
+   * spatial gradient is exactly zero and it cannot band however far it
+   * travels — which is precisely the fact rounds "22."/"22b." got backwards.
+   * The per-axis rates stay mutually incommensurate and off the (1,1,1)
+   * lattice diagonal, which round "22." was right about.
+   */
+  vec3 moanaNoiseEvolve(float timeS) {
+    return vec3(0.0091, 0.0069, 0.0113) * timeS;
   }
 
   // Mirrors sourceWeightAt() in swellField.ts.

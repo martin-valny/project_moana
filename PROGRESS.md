@@ -3898,6 +3898,158 @@ this noise family's coordinates will eventually band some broad, coherent
 region of the field, on a timescale set by `rate` and how coherent the
 region is, regardless of which direction it points. Bound it.
 
+**This lesson is wrong. See "23." — it is corrected there, not amended.** A
+spatially *uniform* `uTime * rate` cannot band at any magnitude. Rounds "22."
+and "22b." both mis-framed the defect, which is why the user reported the
+banding again immediately after this shipped.
+
+### 23. The banding was never about time or magnitude — it was shear, and both previous rounds fixed the wrong variable
+
+**Reported with a screenshot, after "22b." shipped:** *"i still see decent
+amount of banding/riboning.. its not smooth as it should be."* The screenshot
+shows the scrubber dragged to its far right (past "3 DAYS") and a mature
+packet drawn as nested, roughly-parallel lanes following the arc of its own
+leading edge — the same defect rounds "22." and "22b." each declared fixed.
+
+**Both previous rounds fixed a variable that was never the cause.** They read
+the defect as a *magnitude* problem — a `uTime * rate` coordinate offset
+ramping too far — and treated it twice: "22." steered the drift off simplex's
+`(1,1,1)` lattice diagonal, "22b." bounded it with
+`bound * sin(uTime * rate / bound)`. Neither touched what actually bands.
+
+A spatially **uniform** offset cannot band, however far it travels: it slides
+the whole noise field rigidly and the sampling map stays the identity. What
+bands is **shear** — an offset that differs between neighbouring fragments.
+And every offset in that shader was multiplied by `dirConfidence`:
+
+```glsl
+float dirConfidence = clamp(flowMag * 6.0, 0.0, 1.0) * poleConfidence;
+vec3 coord = moanaNoiseCoord(vPos, dirConfidence);   // = vPos * mix(1.0, 1.75, c)
+coord += f * (1.4 * sin(uTime * 0.01786) + uScrubHours * 0.004) * dirConfidence;
+vec3 evolve = f * 0.15 * dirConfidence + EVOLVE_DRIFT_BOUND * sin(...);
+```
+
+`flowMag` is a sum of `away * w³`, so `dirConfidence` is a **cubed** packet
+weight ramping 0 → 1 across a packet body only ~0.23 rad wide. Measured
+directly against the shipping model (`packetAt(15, 48)`, energy 0.8):
+`max |∇dirConfidence| = 28.5` per unit sphere radius. Multiplying any offset
+by that field shears the noise domain by `1 + amplitude × 28.5`:
+
+| term | amplitude | pointwise stretch |
+|---|---|---|
+| `moanaNoiseCoord`'s scale range | 0.75 | 22× |
+| `coord` drift, `t=0` at 96 h scrub | 0.384 | 12× |
+| `coord` drift, drift sine at its peak | 1.784 | 52× |
+| `evolve`'s `f` term | 0.15 | 5× |
+| **composed, `t=0` @ 96 h scrub** | | **≈ 38×** |
+| **composed, sine at its peak** | | **≈ 77×** |
+
+The noise domain was being compressed by up to two orders of magnitude along
+the propagation direction inside every packet, with iso-lines parallel to each
+packet's leading edge. That is precisely the nested lane structure in the
+screenshot — and it is the same anisotropic stretch round "16." built
+deliberately and had rejected on sight (*"hard, evenly spaced contour lines,
+nothing like water"*), an order of magnitude stronger and arrived at by
+accident rather than by decision.
+
+**It also explains three things rounds "22."/"22b." could not:**
+
+- **Worst at the far scrubber**, which is where the screenshot was taken:
+  `uScrubHours * 0.004` peaks at 0.384 there, so ~12× of shear is present
+  *before `uTime` does anything*. The banding exists at `t = 0`. Neither
+  previous round could have found this, because both were looking for a bug
+  that only appears after minutes of idle.
+- **Why it seemed to come and go rather than steadily worsen:**
+  `1.4·sin(uTime·0.01786)` has a period of ≈ 5.9 min, so the shear peaks near
+  t ≈ 88 s and t ≈ 264 s and passes through zero near t ≈ 0, 176 and 352 s.
+  Round "22b."'s idle checkpoints (0/4/7/10 min) happened to land near the
+  quiet phases, which is how a build that still banded got signed off.
+- **Why open water always looked fine:** outside the packets `dirConfidence`
+  is ≈ 0 *and flat*, so there is no shear there at all.
+
+**Why the existing gate never saw it.** `parity-probe.mjs`'s **B2** asserts the
+noise sampling stays isotropic, and reported 1.0001 straight through both
+failed rounds. It evaluates `moanaNoiseCoord` **at a single point, with
+`dirConfidence` held constant**. The defect is `dirConfidence` *varying between
+neighbouring fragments*, in two terms at the call site that B2 does not look
+at. A single-point, fixed-confidence probe is structurally incapable of seeing
+it. Not a threshold that was set too loose — a probe pointed at the wrong axis.
+
+**The fix: the noise sampling map is now an isometry, by invariant.**
+`vPos → coord` is allowed to be a rotation and a uniform scale and nothing
+else. A rotation has an orthogonal Jacobian, so the field it samples can never
+be sheared at any angle, for any elapsed time — which means round "22b."'s
+`sin()` bound is not merely insufficient, it is unnecessary. Anything that must
+vary per fragment now modulates the noise's **amplitude**, which moves no
+sample points and shears by exactly nothing.
+
+```glsl
+// swellField.ts — the whole map, shared so the probe measures what ships
+vec3 moanaNoiseCoord(vec3 P, float timeS, float scrubHours) {
+  float a = timeS * MOANA_NOISE_SPIN_PER_S + scrubHours * MOANA_NOISE_SPIN_PER_H;
+  vec3 k = normalize(MOANA_NOISE_SPIN_AXIS);
+  vec3 R = P * cos(a) + cross(k, P) * sin(a) + k * dot(k, P) * (1.0 - cos(a));
+  return R * MOANA_NOISE_SCALE;   // constant scale, never confidence-varying
+}
+vec3 moanaNoiseEvolve(float timeS) { return vec3(0.0091, 0.0069, 0.0113) * timeS; }
+```
+
+Consequences, all deliberate and all put to the user before starting:
+
+- **The water no longer advects along each swell's own direction.** That
+  per-packet advection *was* the bug; there is no shear-free version of it
+  (with `|∇dirConfidence| = 28.5`, an amplitude under ~0.02 noise units is
+  needed to stay unsheared, which is invisible). Motion is now one global slow
+  drift — a rigid spin of the sampling frame plus a uniform 3D translation into
+  the warp bias. Travel direction is still carried by the packets' own movement
+  and round 14's comet envelope, which is what that asymmetry was built for.
+- **`f` (the normalised flow tangent) is deleted.** Every one of its consumers
+  was a noise coordinate. `flowMag` and round 10's lateral inhibition survive,
+  because `dirConfidence` still needs them.
+- **`moanaNoiseCoord`'s `mix(1.0, 1.75, dirConfidence)` detail cue is preserved
+  as an amplitude**: the existing wispy-detail octave is now weighted
+  `0.06 + 0.08 * dirConfidence`. Same "finer structure where the energy is"
+  read, zero shear. Scale settles at a constant 1.2.
+- Round "22."'s one correct finding is kept: the per-axis evolve rates stay
+  mutually incommensurate and off the `(1,1,1)` lattice diagonal.
+
+**The gate rounds "22."/"22b." did not add — B4, in two halves.**
+
+*Numerically:* walk a grid across a real mature packet, at five
+`(uTime, uScrubHours)` phases including the extremes, and finite-difference the
+map along two orthogonal great-circle directions. For a rotation and a uniform
+scale, `σ_max/σ_min` = 1.0; the gate fails above 1.25.
+
+*Structurally:* the numeric half is only decisive because `coord` now depends on
+nothing but `vPos` and two uniforms — so `moanaNoiseCoord` **is** the composed
+map. The historical bug did not live in that function; it lived in a `coord +=`
+line at the call site that the shared function knew nothing about. So B4 also
+reads `GlobeSphere.tsx` and asserts `coord` is assigned exactly once and never
+offset. That is the exact shape of the regression, and no probe of the shared
+function alone can see it.
+
+**B4 was verified to have teeth, not just to pass.** The pre-round-23 map was
+replayed through B4's own metric (throwaway script, the old two lines verbatim
+against the same storm): it measures **2.59** at rest, **2.92** at the far
+scrubber, **7.48** at the drift sine's peak — failing at *every* phase
+including `t = 0`. The current map measures **1.0009**. (Those are lower than
+the 12–77× pointwise figures above because a 1.5° central difference averages
+the stretch across its window rather than sampling the peak. It does not need
+the peak to fail.)
+
+A pixel-level ridge detector on the rendered frame was considered as a third
+gate and deliberately not added: it would be dominated by coastlines and the
+limb, and a flaky gate is worse than none. The cost is that B4 catches this
+*mechanism* (a per-fragment offset reaching a noise coordinate) rather than the
+*symptom* (visible ridges) — if banding ever appears from some other cause, B4
+will not be the thing that reports it.
+
+**Lesson, replacing the one recorded in "22b.":** the question is not "is this
+term bounded", nor "does it avoid the lattice diagonal". It is **"does this term
+vary between neighbouring fragments?"** A uniform offset of any size is safe; a
+tiny one scaled by a steep spatial field is not. Keep noise coordinates to
+isometries and put every per-fragment variation in an amplitude.
+
 ### [REVERTED — see "18b."] 18. The land-shadow model was wrong in kind, not in tuning — rewritten as a shadow
 
 **Reported by the user after rounds "15."-"17.":** *"in last two rounds we've
