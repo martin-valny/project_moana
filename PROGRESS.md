@@ -4081,6 +4081,39 @@ limb, and a flaky gate is worse than none. The cost is that B4 catches this
 *symptom* (visible ridges) — if banding ever appears from some other cause, B4
 will not be the thing that reports it.
 
+**Full suite.** `npm run build` / `npm run lint` clean. Parity `B` 0.000999,
+`B2` 1.0001, `B3` 0.00333 — all unchanged. `B4` 1.0009, both halves.
+`qc-real-pulses.mjs` all five real windows. Stage A 5/5. `smoke-test.mjs` both
+viewports, zero console errors; `panel-glass-test.mjs`; `rotate-test.mjs`.
+
+**Stage C 8/9, and one number moved that needed explaining rather than
+waving through.** `M10` still fails — the pre-existing, already-documented
+finding from round "21." — but it did *not* come back at its recorded 0.171,
+and `M2` did not come back at its recorded 2.71:
+
+| | ocean P50 | M2 (threshold 2.5) | M10 (range 0.35-0.90) |
+|---|---|---|---|
+| recorded baseline (rounds 21/22) | — | 2.71 | 0.171 |
+| this round, `MOANA_NOISE_SCALE = 1.0` | 40 | 2.59 | 0.173 |
+| this round, `MOANA_NOISE_SCALE = 1.2` | 36 | 2.87 | 0.193 |
+
+Land is untouched by this round, so both shifts had to share one cause. They
+do: replacing `mix(1.0, 1.75, dirConfidence)` with a constant changes what open
+water is sampled at — it used to sit at 1.0 out there, because `dirConfidence`
+is ~0 away from a packet. Confirmed by direct A/B rather than assumed: building
+at 1.0 reproduces the recorded baseline (M10 0.173 against 0.171, M2 within
+run-to-run framing noise), and the 10% darker ocean median at 1.2 is entirely
+this constant.
+
+`1.2` is kept. It is better on both affected gates — more headroom on `M2`
+(2.87 against a 2.5 threshold, versus 2.59 at scale 1.0), and it moves `M10`
+slightly *toward* its passing range rather than away, since that metric fails
+for land being too dark relative to water. It also keeps packet interiors
+closest to the effective scale they had before (`dirConfidence` measures
+0.1-0.4 inside a packet, i.e. an old effective scale of 1.08-1.30), which is
+where the eye actually goes. `M10`'s failure is unrelated to this round and
+unchanged in kind: the land base sits far below the range that metric wants.
+
 **Lesson, replacing the one recorded in "22b.":** the question is not "is this
 term bounded", nor "does it avoid the lattice diagonal". It is **"does this term
 vary between neighbouring fragments?"** A uniform offset of any size is safe; a
