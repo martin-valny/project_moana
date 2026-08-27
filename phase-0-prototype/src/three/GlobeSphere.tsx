@@ -693,7 +693,11 @@ export function GlobeSphere({
   // which is what made every screenshot-based visual check across every
   // prior round unreliable for judging "is the swell on the correct side of
   // this coastline" without realising it.
-  const landMask = useLoader(THREE.TextureLoader, '/textures/earth-water.png');
+  // BASE_URL-prefixed rather than a bare "/textures/..." absolute path: this
+  // app is deployed under a subpath on GitHub Pages
+  // (<user>.github.io/project_moana/), and a hardcoded leading slash would
+  // resolve to the domain root instead, silently 404-ing both textures.
+  const landMask = useLoader(THREE.TextureLoader, `${import.meta.env.BASE_URL}textures/earth-water.png`);
   landMask.flipY = false;
   landMask.wrapS = THREE.RepeatWrapping;
   landMask.colorSpace = THREE.NoColorSpace;
@@ -709,7 +713,7 @@ export function GlobeSphere({
   // otherwise its continent detail and city lights would sit on the
   // opposite hemisphere from the (now-corrected) land mask they're drawn
   // on top of.
-  const nightTexture = useLoader(THREE.TextureLoader, '/textures/earth-night.jpg');
+  const nightTexture = useLoader(THREE.TextureLoader, `${import.meta.env.BASE_URL}textures/earth-night.jpg`);
   nightTexture.flipY = false;
   nightTexture.wrapS = THREE.RepeatWrapping;
   nightTexture.colorSpace = THREE.NoColorSpace; // sampled as raw texel data, same as this shader's hand-tuned hex colours — not colour-managed
