@@ -3,7 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- maximum-scale=1/user-scalable=no close a real iOS Safari gap: its
+         system pinch-zoom gesture can still scale the whole page even with
+         `touch-action: none` on body (set in index.css), so a pinch meant
+         for the globe's own in-canvas zoom (OrbitControls) could zoom the
+         browser page instead, shrinking everything — text included — with
+         no way back short of a reload. Confirmed directly: two phone
+         screenshots minutes apart, taken while pinching to zoom the globe,
+         the second a uniformly smaller page with far more black margin all
+         around, not a globe-only size change. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <!-- High-contrast Didone-family serif. The eventual Expo port cannot use a
          <link> — it bundles the font file via expo-font instead. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
