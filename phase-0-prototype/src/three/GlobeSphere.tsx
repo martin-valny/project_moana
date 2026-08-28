@@ -972,7 +972,26 @@ export function GlobeSphere({
           rather than a hidden proxy for it. */}
       <mesh onClick={handlePick} onPointerDown={handlePointerDown}>
         <sphereGeometry args={[radius, 128, 128]} />
-        <shaderMaterial ref={materialRef} vertexShader={SURFACE_VERTEX} fragmentShader={SURFACE_FRAGMENT} uniforms={surfaceUniforms} />
+        {/* precision="highp": left at THREE's default (renderer-negotiated,
+            not necessarily highp) this read fine on desktop but rendered
+            the swell as hard geometric facets on an iPhone — reported
+            directly, with a screenshot, after the quality-tier fix ruled
+            out octaves/dpr as the cause. The swell field's math is all
+            per-fragment (moanaSourceWeight etc. in swellField.ts, inlined
+            via SWELL_FIELD_GLSL) and leans on dot()/acos() between
+            near-parallel unit vectors — small angular differences show up
+            as tiny differences in a dot product close to 1, which is
+            exactly where mediump's ~10-bit mantissa runs out of precision
+            first. 128x128 geometry (unchanged) rules out a mesh-resolution
+            explanation; this is a fragment-shader math precision problem,
+            not a tessellation one. */}
+        <shaderMaterial
+          ref={materialRef}
+          vertexShader={SURFACE_VERTEX}
+          fragmentShader={SURFACE_FRAGMENT}
+          uniforms={surfaceUniforms}
+          precision="highp"
+        />
       </mesh>
       <mesh scale={ATMOSPHERE_SCALE}>
         <sphereGeometry args={[radius, 64, 64]} />
@@ -980,6 +999,7 @@ export function GlobeSphere({
           vertexShader={ATMOSPHERE_VERTEX}
           fragmentShader={ATMOSPHERE_FRAGMENT}
           uniforms={atmosphereUniforms}
+          precision="highp"
           transparent
           depthWrite={false}
           side={THREE.BackSide}
