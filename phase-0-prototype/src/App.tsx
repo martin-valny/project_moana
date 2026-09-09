@@ -4,6 +4,7 @@ import { Masthead } from './components/Masthead';
 import { Timeline } from './components/Timeline';
 import { SwellPanel } from './components/SwellPanel';
 import { Attribution } from './components/Attribution';
+import { GpuDebug } from './components/GpuDebug';
 import { useFollow } from './hooks/useFollow';
 import { useDampedValue } from './hooks/useDampedValue';
 import { buildHelenaPulse, HELENA_MAX_OFFSET_HOURS, HELENA_MIN_OFFSET_HOURS, shortLabelFor } from './data/helena';
@@ -71,8 +72,11 @@ export default function App() {
     };
   }, [currentPoint]);
 
+  const showGpuDebug = useMemo(() => new URLSearchParams(window.location.search).has('debug'), []);
+
   return (
     <div className="app">
+      {showGpuDebug && <GpuDebug />}
       <Globe
         pulse={pulse}
         startTime={startTime}
