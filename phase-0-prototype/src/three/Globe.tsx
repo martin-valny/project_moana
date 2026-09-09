@@ -3,10 +3,11 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette, Noise, HueSaturation, BrightnessContrast, ToneMapping } from '@react-three/postprocessing';
 import { ToneMappingMode } from 'postprocessing';
-import { NoToneMapping, Vector3, type PerspectiveCamera } from 'three';
+import { HalfFloatType, NoToneMapping, UnsignedByteType, Vector3, type PerspectiveCamera } from 'three';
 import { GlobeSphere } from './GlobeSphere';
 import { latLonToVector3 } from './geo';
 import { detectQualityTier } from './qualityTier';
+import { supportsHalfFloatRenderTarget } from './frameBufferSupport';
 import { buildSwellSources, resolveSwellSources } from '../data/swellSources';
 import { sourceWeightAt, type SwellSourceState, type Vec3 } from '../data/swellField';
 import type { ShadowAtlas } from './landOcclusion';
@@ -162,6 +163,15 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
    */
   const [shadow, setShadow] = useState<ShadowAtlas | null>(null);
 
+  // EffectComposer defaults to a HalfFloatType frame buffer (for HDR
+  // precision ahead of ACES tonemapping) without checking whether this GPU
+  // can actually render into one — see frameBufferSupport.ts for why that
+  // silently blanks the whole scene, not just the postprocessing, on a
+  // device where it can't. Detected once against the real context this
+  // Canvas creates, then EffectComposer is remounted with the safe type if
+  // needed.
+  const [frameBufferType, setFrameBufferType] = useState<typeof HalfFloatType | typeof UnsignedByteType>(HalfFloatType);
+
   const handlePick = useCallback(
     (unit: Vector3) => {
       const p: Vec3 = [unit.x, unit.y, unit.z];
@@ -184,6 +194,9 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
       camera={{ position: INITIAL_VIEW, fov: FOV, near: 0.5, far: 400 }}
       gl={{ antialias: true, toneMapping: NoToneMapping }}
       dpr={quality.dpr}
+      onCreated={({ gl }) => {
+        if (!supportsHalfFloatRenderTarget(gl.getContext())) setFrameBufferType(UnsignedByteType);
+      }}
     >
       <color attach="background" args={['#02040a']} />
       <FillFrameCamera radius={RADIUS} />
@@ -215,7 +228,7 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
         dampingFactor={0.07}
       />
 
-      <EffectComposer multisampling={0}>
+      <EffectComposer multisampling={0} frameBufferType={frameBufferType}>
         <Bloom
           intensity={0.6}
           luminanceThreshold={0.5}

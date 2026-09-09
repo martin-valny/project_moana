@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { detectQualityTier } from '../three/qualityTier';
+import { supportsHalfFloatRenderTarget } from '../three/frameBufferSupport';
 
 /**
  * `?debug=1` only. Not app UI — a throwaway probe for the "looks great on
@@ -46,6 +47,23 @@ export function GpuDebug() {
           `${name}: ${p ? `range=[-${p.rangeMin},${p.rangeMax}] precision=${p.precision}${p.rangeMax === 0 ? ' (UNSUPPORTED)' : ''}` : 'query failed'}`,
         );
       }
+      // EffectComposer (@react-three/postprocessing) defaults to a
+      // HalfFloatType main frame buffer for HDR precision ahead of ACES
+      // tonemapping, without checking whether this GPU can actually render
+      // into one. If this comes back false, that buffer's color attachment
+      // isn't color-renderable, the framebuffer is incomplete, and WebGL
+      // silently no-ops every draw into it — the whole base scene (ocean,
+      // stars, everything except Bloom's own additively-composited glow)
+      // reads back blank. Globe.tsx now probes this itself and falls back
+      // to UnsignedByteType when it's false, so this line should read
+      // `frameBufferType=UnsignedByteType (half-float unsupported)` on an
+      // affected device rather than reproducing the bug — if the ambient
+      // ocean is STILL missing with that fallback active, the cause is
+      // something else and this extension isn't it.
+      const halfFloatOk = supportsHalfFloatRenderTarget(gl);
+      out.push(
+        `EXT_color_buffer_half_float(or _float)=${halfFloatOk} -> frameBufferType=${halfFloatOk ? 'HalfFloatType' : 'UnsignedByteType (half-float unsupported)'}`,
+      );
     }
 
     setLines(out);
