@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - claude/swell-landmass-collision-j5f80b
+      - claude/mobile-preview-syndyg
   workflow_dispatch: {}
 
 permissions:
