@@ -155,6 +155,15 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
   );
 
   const exposeMarker = useMemo(() => new URLSearchParams(window.location.search).has('e2e'), []);
+  // `?debug=1` only. GpuDebug.tsx reads pixels back off the live canvas to
+  // check what's actually on screen rather than trusting capability queries
+  // alone — that needs the drawing buffer to survive past the frame it was
+  // drawn in, which WebGL doesn't guarantee unless asked (preserveDrawingBuffer
+  // defaults to false, letting the browser discard it right after compositing).
+  // Off by default: it's a real cost (disables some buffer-swap optimizations,
+  // notably on mobile — the exact platform this is diagnosing), not worth
+  // paying outside a debug session.
+  const debug = useMemo(() => new URLSearchParams(window.location.search).has('debug'), []);
 
   /**
    * Which swell did that tap land on? Argmax of the field's own per-source
@@ -192,7 +201,7 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
   return (
     <Canvas
       camera={{ position: INITIAL_VIEW, fov: FOV, near: 0.5, far: 400 }}
-      gl={{ antialias: true, toneMapping: NoToneMapping }}
+      gl={{ antialias: true, toneMapping: NoToneMapping, preserveDrawingBuffer: debug }}
       dpr={quality.dpr}
       onCreated={({ gl }) => {
         if (!supportsHalfFloatRenderTarget(gl.getContext())) setFrameBufferType(UnsignedByteType);

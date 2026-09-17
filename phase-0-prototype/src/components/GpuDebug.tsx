@@ -69,6 +69,42 @@ export function GpuDebug() {
     setLines(out);
   }, []);
 
+  // Everything above only queries what the GPU *claims* to support — tier,
+  // precision, extensions all came back matching desktop on the iPhone this
+  // was tested on, yet the ambient ocean was still flat black there. So this
+  // reads back what actually landed in the framebuffer: a scanline of real
+  // on-screen pixel values through the middle of the globe, straight from
+  // the live canvas (needs Globe.tsx's `preserveDrawingBuffer: debug`, or
+  // the browser is free to have already discarded the buffer by the time
+  // this timer fires). If calm-ocean samples come back indistinguishable
+  // from the page background, the crush is real and on-screen, not a
+  // trick of a phone photo — and if they come back close to what desktop
+  // shows, the bug is downstream of the canvas (display/compositor colour
+  // management), not in this render at all.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const canvas = document.querySelector('canvas');
+      const gl = canvas?.getContext('webgl2') as WebGL2RenderingContext | null;
+      if (!canvas || !gl) {
+        setLines((prev) => [...prev, 'pixel probe: no canvas/webgl2 context found']);
+        return;
+      }
+      const w = canvas.width;
+      const h = canvas.height;
+      const y = Math.floor(h / 2);
+      const buf = new Uint8Array(4);
+      const SAMPLES = 16;
+      const samples: string[] = [];
+      for (let i = 0; i < SAMPLES; i++) {
+        const x = Math.floor(((i + 0.5) / SAMPLES) * w);
+        gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+        samples.push(`(${buf[0]},${buf[1]},${buf[2]})`);
+      }
+      setLines((prev) => [...prev, `pixel probe scanline y=${y} of ${w}x${h}: ${samples.join(' ')}`]);
+    }, 2500);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   return (
     <pre
       style={{
