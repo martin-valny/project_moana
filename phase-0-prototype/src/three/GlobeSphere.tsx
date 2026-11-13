@@ -87,6 +87,10 @@ const SURFACE_FRAGMENT = /* glsl */ `
   uniform vec3 uScatterColor;
   uniform float uPeriodHueMin;
   uniform float uPeriodHueMax;
+  // ?debug=1 only (0 otherwise): replaces the output with one intermediate
+  // value so GpuDebug.tsx can bisect, on the real device, which step of
+  // this shader first goes to zero. See the stage list there.
+  uniform int uDebugStage;
 
   ${SIMPLEX_NOISE_GLSL}
   ${FBM_GLSL}
@@ -114,6 +118,9 @@ const SURFACE_FRAGMENT = /* glsl */ `
   // where their energy reaches zero. The clamp changes nothing visible:
   // pow(1e-6, 1.6) is ~2e-10.
   void main() {
+    // Red = "this stage isn't computed on land", so a land sample can't be
+    // mistaken for a dead ocean one.
+    vec3 dbg = vec3(0.3, 0.0, 0.0);
     vec2 uv = posToUv(vPos);
     // earth-water.png is a real (Natural-Earth-derived) mask: white(1)=ocean,
     // black(0)=land, with actual river networks — inverted here so every
@@ -138,6 +145,12 @@ const SURFACE_FRAGMENT = /* glsl */ `
     float nightLum = dot(nightSample, vec3(0.299, 0.587, 0.114));
 
     vec3 color;
+
+    if (uDebugStage == 1) dbg = vec3(0.02);
+    if (uDebugStage == 2) dbg = vec3(0.25);
+    if (uDebugStage == 3) dbg = uOceanDeep * 8.0;
+    if (uDebugStage == 4) dbg = vec3(m);
+    if (uDebugStage == 5) dbg = vec3(nightLum * 4.0);
 
     if (m > 0.5) {
       // Land: a dark slate-navy shape lifted slightly by the real texture's
@@ -493,6 +506,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // Calm water keeps its own faint structure — the reference shows wispy
       // detail across the whole ocean, not only inside the bright bands.
       vec3 oceanColor = mix(uOceanDeep, uOceanMid, band * 0.34);
+      vec3 dbgBaseOcean = oceanColor;
 
       // Round 13's Bug 1, kept fixed: colour used to enter the ocean *only*
       // scaled by 'band' (how much ribbon noise sits at this exact pixel), so
@@ -534,6 +548,19 @@ const SURFACE_FRAGMENT = /* glsl */ `
       oceanColor *= 1.0 + nightLum * 0.6;
 
       color = oceanColor;
+
+      if (uDebugStage == 6) dbg = vec3(edgeJitter * 0.5 + 0.5);
+      if (uDebugStage == 7) dbg = vec3(fieldEnergy01);
+      if (uDebugStage == 8) dbg = vec3(n * 0.5 + 0.5);
+      if (uDebugStage == 9) dbg = vec3(band);
+      if (uDebugStage == 10) dbg = dbgBaseOcean * 8.0;
+      if (uDebugStage == 11) dbg = oceanColor * 4.0;
+      if (uDebugStage == 12) {
+        bool nan = isnan(edgeJitter) || isnan(energyAccum) || isnan(flowMag) || isnan(n) || isnan(band)
+          || isnan(washWeight) || any(isnan(oceanColor));
+        bool huge = abs(n) > 1e20 || abs(energyAccum) > 1e20 || any(greaterThan(abs(oceanColor), vec3(1e20)));
+        dbg = vec3(nan ? 1.0 : (huge ? 0.6 : 0.25));
+      }
     }
 
     color = mix(color, uCoastColor, stroke);
@@ -559,6 +586,8 @@ const SURFACE_FRAGMENT = /* glsl */ `
     // the ceiling above the floor preserves round 5's directional read;
     // this only stops the unlit half falling away into near-black.
     color *= mix(0.80, 1.28, lit);
+    if (uDebugStage == 13) dbg = color * 4.0;
+    if (uDebugStage == 14) dbg = vec3(lit * 0.5);
 
     // What used to carry the "sphere" read on its own is now just a
     // whisper: a near-imperceptible grazing-angle falloff, and a thin
@@ -576,6 +605,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
     color += uScatterColor * pow(max(1.0 - facing, 1e-6), 3.0) * 0.20;
 
     gl_FragColor = vec4(color, 1.0);
+    if (uDebugStage > 0) gl_FragColor = vec4(dbg, 1.0);
   }
 `;
 
@@ -851,6 +881,7 @@ export function GlobeSphere({
       uScatterColor: { value: new THREE.Color('#5aa8cc') },
       uPeriodHueMin: { value: PERIOD_HUE_MIN_S },
       uPeriodHueMax: { value: PERIOD_HUE_MAX_S },
+      uDebugStage: { value: 0 },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [landMask, nightTexture],
@@ -885,6 +916,13 @@ export function GlobeSphere({
   useFrame((state) => {
     if (materialRef.current) materialRef.current.uniforms.uTime.value = state.clock.elapsedTime;
   });
+
+  // Lets GpuDebug.tsx (?debug=1) step the shader through its debug stages.
+  useEffect(() => {
+    (window as unknown as Record<string, unknown>).__moanaSetDebugStage = (stage: number) => {
+      if (materialRef.current) materialRef.current.uniforms.uDebugStage.value = stage;
+    };
+  }, []);
 
   useEffect(() => {
     const material = materialRef.current;

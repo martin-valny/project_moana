@@ -172,6 +172,14 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
    */
   const [shadow, setShadow] = useState<ShadowAtlas | null>(null);
 
+  // `?debug=1` only: GpuDebug.tsx switches postprocessing off for one of its
+  // readings, to tell "the shader produced black" apart from "the effect
+  // chain turned it black".
+  const [fxOn, setFxOn] = useState(true);
+  useEffect(() => {
+    (window as unknown as Record<string, unknown>).__moanaSetFx = setFxOn;
+  }, []);
+
   // EffectComposer defaults to a HalfFloatType frame buffer (for HDR
   // precision ahead of ACES tonemapping) without checking whether this GPU
   // can actually render into one — see frameBufferSupport.ts for why that
@@ -237,6 +245,7 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
         dampingFactor={0.07}
       />
 
+      {fxOn && (
       <EffectComposer multisampling={0} frameBufferType={frameBufferType}>
         <Bloom
           intensity={0.6}
@@ -263,6 +272,7 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
         <Noise opacity={0.018} premultiply />
         <Vignette eskil={false} offset={0.32} darkness={0.32} />
       </EffectComposer>
+      )}
     </Canvas>
   );
 }
