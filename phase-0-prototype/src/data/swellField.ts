@@ -464,7 +464,9 @@ export const SWELL_FIELD_GLSL = /* glsl */ `
     float width = max(rLead - rTrail, 1e-4);
     float s = clamp((d - rTrail) / width, 0.0, 1.0);
     float outer = 1.0 - smoothstep(rLead, rLead + width * MOANA_FEATHER_FRAC, d);
-    return pow(s, MOANA_COMET_POWER) * outer;
+    // max(): pow(0, y) can return NaN on some mobile GPUs — see the note
+    // above main() in GlobeSphere.tsx.
+    return pow(max(s, 1e-6), MOANA_COMET_POWER) * outer;
   }
 
   // Mirrors sourceSpread() in swellField.ts.

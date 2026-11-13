@@ -104,6 +104,15 @@ const SURFACE_FRAGMENT = /* glsl */ `
     return vec2(theta / (2.0 * 3.14159265), phi / 3.14159265);
   }
 
+  // Every pow() in this file clamps its base to a tiny positive number.
+  // pow(0, y) is commonly evaluated as exp2(y * log2(0)), and with the
+  // fast-math the iPhone GPU's shader compiler applies that can come back
+  // NaN instead of 0 (the Mac's GPU returns 0, so this never shows there).
+  // One NaN blacks out the whole pixel: on a real iPhone the calm ocean
+  // (zero swell energy) and any land where the night texture is pure black
+  // read back as exactly (0,0,0), with swells ending in a hard cutout
+  // where their energy reaches zero. The clamp changes nothing visible:
+  // pow(1e-6, 1.6) is ~2e-10.
   void main() {
     vec2 uv = posToUv(vPos);
     // earth-water.png is a real (Natural-Earth-derived) mask: white(1)=ocean,
@@ -171,7 +180,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // the ocean's filaments texturally. §5.1 wants land as orientation
       // only. M10 in field-metrics.mjs now holds the ratio in range, so
       // this cannot drift back on some later palette pass.
-      color = uLandColor + vec3(0.34, 0.33, 0.31) * pow(nightLum, 2.3) * 0.30;
+      color = uLandColor + vec3(0.34, 0.33, 0.31) * pow(max(nightLum, 1e-6), 2.3) * 0.30;
     } else {
       // --- Swell propagation: per-fragment direction and energy --------
       // Each source contributes a dispersive packet (../data/swellField.ts):
@@ -277,7 +286,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
         // of being averaged with weaker neighbours. Energy stays a true sum
         // (unchanged below) — overlapping swells genuinely do carry more
         // combined energy, and that part already read fine.
-        float wDir = pow(w, 3.0);
+        float wDir = pow(max(w, 1e-6), 3.0);
         flowAccum += away * wDir;
         energyAccum += w;
         poleAccum += poleFade * w;
@@ -450,7 +459,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // shape itself was never the problem.
       float band = smoothstep(-0.35, 0.52, n);
       float crest = smoothstep(0.34, 0.70, n);
-      crest = pow(crest, 2.0);
+      crest = pow(max(crest, 1e-6), 2.0);
 
       // --- Colour: brightness carries the information, hue carries identity
       //
@@ -505,7 +514,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
       // colour rather than as bands lit on deep water. Squaring-ish
       // suppresses the long low-energy tail while leaving the bands
       // untouched, so open water stays open water.
-      float washWeight = pow(energyFocused, 1.6);
+      float washWeight = pow(max(energyFocused, 1e-6), 1.6);
       oceanColor = mix(oceanColor, swellColor * 0.5, washWeight * 0.95);
       oceanColor = mix(oceanColor, swellColor * 1.45, band * washWeight * 0.9);
 
@@ -564,7 +573,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
     // the disc, not a thin outline — and it passes over land and ocean
     // alike, which is a large part of what unifies the two into one lit
     // sphere rather than a textured ball with holes cut in it.
-    color += uScatterColor * pow(1.0 - facing, 3.0) * 0.20;
+    color += uScatterColor * pow(max(1.0 - facing, 1e-6), 3.0) * 0.20;
 
     gl_FragColor = vec4(color, 1.0);
   }
@@ -621,7 +630,7 @@ const ATMOSPHERE_FRAGMENT = /* glsl */ `
     // size at that brightness filled most of the frame's black margin. Much
     // smaller shell, steeper falloff, lower peak: a glow that hugs the limb
     // rather than one that competes with the planet for the frame.
-    gl_FragColor = vec4(uColor, pow(t, 3.2) * 0.22);
+    gl_FragColor = vec4(uColor, pow(max(t, 1e-6), 3.2) * 0.22);
   }
 `;
 
