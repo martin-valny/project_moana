@@ -2,7 +2,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette, Noise, HueSaturation, BrightnessContrast, ToneMapping } from '@react-three/postprocessing';
-import { ToneMappingMode } from 'postprocessing';
+import { BlendFunction, Effect, ToneMappingMode } from 'postprocessing';
 import { HalfFloatType, NoToneMapping, UnsignedByteType, Vector3, type PerspectiveCamera } from 'three';
 import { GlobeSphere } from './GlobeSphere';
 import { latLonToVector3 } from './geo';
@@ -14,6 +14,37 @@ import type { ShadowAtlas } from './landOcclusion';
 import type { SwellPulse } from '../data/types';
 
 const RADIUS = 2;
+
+/**
+ * Last effect in the chain: clamps the graded colour to [1e-6, 1] before
+ * the composer encodes it to sRGB. The floor is a hair above zero rather
+ * than zero itself so the encode's pow() never sees an exact 0 either
+ * (1e-6 still encodes to 0 in 8 bits, so nothing visible changes).
+ *
+ * The grade can leave a channel at zero or slightly negative: ACES returns red = 0 for
+ * the deep-blue ocean, then HueSaturation's boost pushes that channel
+ * further from the average (below zero), and BrightnessContrast's contrast
+ * scaling does the same to anything very dark. The sRGB encode that follows
+ * is a pow(), and pow() of a negative base is undefined. A Mac's GPU shrugs
+ * (the channel lands on 0, the pixel is fine); a real iPhone blacks out the
+ * whole pixel. Measured on the device with the ?debug=1 bisect: every
+ * shader stage and the no-postprocessing render matched the Mac, a flat
+ * grey survived the chain, and any saturated blue came out (0,0,0) —
+ * which was the entire calm ocean.
+ */
+class ClampOutputEffect extends Effect {
+  constructor() {
+    super(
+      'ClampOutputEffect',
+      'void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) { outputColor = vec4(clamp(inputColor.rgb, 1e-6, 1.0), inputColor.a); }',
+      { blendFunction: BlendFunction.SET },
+    );
+  }
+}
+
+/** `on` everywhere except the `?debug=1` bisect, which drops one effect at a
+    time to show which of them the device objects to. */
+export type FxMode = 'on' | 'off' | 'noclamp' | 'nohue' | 'nobc' | 'nonoise' | 'novignette' | 'nograde';
 
 // Open looking at the North Atlantic — the basin Helena crosses, so she is
 // on screen from the first frame rather than round the far side.
@@ -175,10 +206,11 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
   // `?debug=1` only: GpuDebug.tsx switches postprocessing off for one of its
   // readings, to tell "the shader produced black" apart from "the effect
   // chain turned it black".
-  const [fxOn, setFxOn] = useState(true);
+  const [fx, setFx] = useState<FxMode>('on');
   useEffect(() => {
-    (window as unknown as Record<string, unknown>).__moanaSetFx = setFxOn;
+    (window as unknown as Record<string, unknown>).__moanaSetFx = setFx;
   }, []);
+  const clampEffect = useMemo(() => new ClampOutputEffect(), []);
 
   // EffectComposer defaults to a HalfFloatType frame buffer (for HDR
   // precision ahead of ACES tonemapping) without checking whether this GPU
@@ -245,8 +277,8 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
         dampingFactor={0.07}
       />
 
-      {fxOn && (
-      <EffectComposer multisampling={0} frameBufferType={frameBufferType}>
+      {fx !== 'off' && (
+      <EffectComposer key={fx} multisampling={0} frameBufferType={frameBufferType}>
         <Bloom
           intensity={0.6}
           luminanceThreshold={0.5}
@@ -267,10 +299,11 @@ export function Globe({ pulse, startTime, offsetHours, selectedIndex, onSelectSo
             cyan and the green patches came out neon. The grade should be
             the last few percent, not a second colour decision. */}
         <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
-        <HueSaturation saturation={0.05} />
-        <BrightnessContrast brightness={0.02} contrast={0.06} />
-        <Noise opacity={0.018} premultiply />
-        <Vignette eskil={false} offset={0.32} darkness={0.32} />
+        {fx !== 'nohue' && fx !== 'nograde' ? <HueSaturation saturation={0.05} /> : <></>}
+        {fx !== 'nobc' && fx !== 'nograde' ? <BrightnessContrast brightness={0.02} contrast={0.06} /> : <></>}
+        {fx !== 'nonoise' && fx !== 'nograde' ? <Noise opacity={0.018} premultiply /> : <></>}
+        {fx !== 'novignette' && fx !== 'nograde' ? <Vignette eskil={false} offset={0.32} darkness={0.32} /> : <></>}
+        {fx !== 'noclamp' && fx !== 'nograde' ? <primitive object={clampEffect} dispose={null} /> : <></>}
       </EffectComposer>
       )}
     </Canvas>

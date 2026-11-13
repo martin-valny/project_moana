@@ -24,20 +24,13 @@ declare const __BUILD_ID__: string;
  */
 const STAGES: Array<[number, string, 'g' | 'rgb']> = [
   [1, 'const .02', 'g'],
-  [2, 'const .25', 'g'],
   [3, 'uOceanDeep x8', 'rgb'],
-  [4, 'land mask m', 'g'],
-  [5, 'nightLum x4', 'g'],
-  [6, 'edgeJitter (fbm)', 'g'],
-  [7, 'fieldEnergy', 'g'],
-  [8, 'noise n', 'g'],
-  [9, 'band', 'g'],
-  [10, 'base ocean x8', 'rgb'],
   [11, 'final ocean x4', 'rgb'],
-  [12, 'NaN map (nan=bright)', 'g'],
-  [13, 'lit colour x4', 'rgb'],
-  [14, 'lit factor', 'g'],
 ];
+
+/** Effect-chain variants read after the shader stages (see FxMode in
+    Globe.tsx). `noclamp` is the chain as it was before the fix. */
+const FX_MODES = ['off', 'nograde', 'noclamp', 'nohue', 'nobc', 'nonoise', 'novignette'] as const;
 
 const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -66,7 +59,6 @@ export function GpuDebug() {
     const out: string[] = [`build=${__BUILD_ID__}`];
     const tier = detectQualityTier();
     out.push(`tier=${tier.tier} octaves=${tier.octaves} mipmapBlur=${tier.mipmapBlur} dpr=${JSON.stringify(tier.dpr)}`);
-    out.push(`ua=${navigator.userAgent}`);
     out.push(
       `cores=${navigator.hardwareConcurrency ?? 'n/a'} mem=${(navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 'n/a'} dpr(actual)=${window.devicePixelRatio}`,
     );
@@ -155,7 +147,7 @@ export function GpuDebug() {
     async function runBisect() {
       const win = window as unknown as {
         __moanaSetDebugStage?: (stage: number) => void;
-        __moanaSetFx?: (on: boolean) => void;
+        __moanaSetFx?: (mode: string) => void;
       };
       if (!win.__moanaSetDebugStage || !win.__moanaSetFx) {
         setLines((prev) => [...prev, 'bisect: hooks missing']);
@@ -173,15 +165,19 @@ export function GpuDebug() {
         const line = `s${stage} ${label}: ${readScanline(mode)}`;
         setLines((prev) => [...prev, line]);
       }
-      // Normal render, postprocessing off: is the black made by the shader
-      // or by the effect chain?
+      // The normal picture under each effect-chain variant: which effect
+      // does this device turn black?
       win.__moanaSetDebugStage(0);
-      win.__moanaSetFx(false);
-      await wait(600);
-      const noFx = `no-fx final: ${readScanline('rgb')}`;
-      win.__moanaSetFx(true);
-      await wait(600);
-      setLines((prev) => [...prev, noFx, `fx back on: ${readScanline('rgb')}`, 'bisect done']);
+      for (const mode of FX_MODES) {
+        if (cancelled) return;
+        win.__moanaSetFx(mode);
+        await wait(700);
+        const line = `fx ${mode}: ${readScanline('rgb')}`;
+        setLines((prev) => [...prev, line]);
+      }
+      win.__moanaSetFx('on');
+      await wait(700);
+      setLines((prev) => [...prev, `fx on (shipping): ${readScanline('rgb')}`, 'bisect done']);
     }
 
     return () => {
